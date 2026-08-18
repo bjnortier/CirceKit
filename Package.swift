@@ -17,6 +17,10 @@ let package = Package(
             targets: ["CirceKit"]
         ),
     ],
+    dependencies: [
+        // Fork of apple/coreai-models. Sibling checkout: Circe/ -> development/ -> apple/.
+        .package(path: "../../apple/coreai-models.bjnortier"),
+    ],
     targets: [
         // whisper.cpp v1.9.1, vendored as a prebuilt XCFramework (module `whisper`).
         .binaryTarget(
@@ -28,7 +32,16 @@ let package = Package(
         // Targets can depend on other targets in this package and products from dependencies.
         .target(
             name: "CirceKit",
-            dependencies: ["whisper"],
+            dependencies: [
+                "whisper",
+                // Note: for a path dependency the package identity is the *directory* name,
+                // not `Package.name` (which is "coreai-models").
+                .product(name: "CoreAISpeech", package: "coreai-models.bjnortier"),
+            ],
+            resources: [
+                // British->American spelling map used by EnglishTextNormalizer.
+                .copy("Metrics/english.json"),
+            ],
             swiftSettings: [
                 .enableUpcomingFeature("ApproachableConcurrency"),
             ],
@@ -36,6 +49,9 @@ let package = Package(
         .testTarget(
             name: "CirceKitTests",
             dependencies: ["CirceKit"],
+            resources: [
+                .copy("Resources"),
+            ],
             swiftSettings: [
                 .enableUpcomingFeature("ApproachableConcurrency"),
             ],
