@@ -195,12 +195,22 @@ internal final class WhisperBackend: TranscriptionBackend {
             tokenTimestamps: wantsTiming
         )
 
+        // Everything whisper.cpp produces is final: the whole clip was decoded in
+        // one pass. Finalization must therefore cover every segment — and it cannot
+        // simply be the audio duration, because whisper rounds segment ends to
+        // centiseconds and routinely reports a last segment ending *past* the end of
+        // the audio (10.00s for a 9.90s clip). Taking the duration there would leave
+        // `isFinal` false, and a caller filtering on it would silently drop a
+        // perfectly good transcript.
+        let finalizationTime = segments.reduce(duration) { latest, segment in
+            max(latest, max(segment.end, segment.start))
+        }
+
         for segment in segments {
-            // Everything is final: the whole file was decoded in one pass.
             let range = CMTimeRange(start: segment.start, end: max(segment.end, segment.start))
             emit(CirceTranscriber.Result(
                 range: range,
-                resultsFinalizationTime: duration,
+                resultsFinalizationTime: finalizationTime,
                 text: attributedText(for: segment),
                 alternatives: []
             ))

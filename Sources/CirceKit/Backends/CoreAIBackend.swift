@@ -26,12 +26,18 @@ public struct CoreAIDecodeStats: Sendable, Equatable {
 /// pretending otherwise.
 internal final class CoreAIBackend: TranscriptionBackend {
     private let model: CoreAIModel
+    private let locale: Locale
     private let overlapSeconds: Double
     private let state = OSAllocatedUnfairLock<SpeechRecognitionModel?>(initialState: nil)
     private let statsBox = OSAllocatedUnfairLock<CoreAIDecodeStats?>(initialState: nil)
 
-    init(model: CoreAIModel, overlapSeconds: Double = SpeechRecognitionModel.defaultOverlapSeconds) {
+    init(
+        model: CoreAIModel,
+        locale: Locale = .current,
+        overlapSeconds: Double = SpeechRecognitionModel.defaultOverlapSeconds
+    ) {
         self.model = model
+        self.locale = locale
         self.overlapSeconds = overlapSeconds
     }
 
@@ -45,6 +51,17 @@ internal final class CoreAIBackend: TranscriptionBackend {
 
     /// Decode statistics from the most recent run.
     var lastStats: CoreAIDecodeStats? { statsBox.withLock { $0 } }
+
+    /// Specializes the graph for `sampleCount` ahead of time.
+    ///
+    /// Never call this on the path you are timing: it runs a full forward pass,
+    /// which roughly doubles the cost of the transcription that follows. It earns
+    /// its keep only for a *dynamic* export, where each distinct input length
+    /// specializes separately and a benchmark wants that cost outside the clock.
+    func prewarm(sampleCount: Int) async throws {
+        try await prepare()
+        try await state.withLock({ $0 })?.prewarm(sampleCount: sampleCount)
+    }
 
     func prepare() async throws {
         guard state.withLock({ $0 }) == nil else { return }
@@ -67,11 +84,17 @@ internal final class CoreAIBackend: TranscriptionBackend {
         let (samples, duration) = try await AudioLoader.collectPCM16kMono(from: inputs)
         guard !samples.isEmpty else { return }
 
-        // Warming at the exact sample count avoids a second graph specialization.
-        try await recognizer.prewarm(sampleCount: samples.count)
+        // Name the language rather than letting the engine detect it: the caller
+        // told us the locale, and detection costs an extra decoder step and can
+        // pick wrong on short or noisy audio. Whisper exports transcribe an
+        // unnamed language as if it were the one they were pinned to, so getting
+        // this wrong is silent.
+        let language: SpeechLanguage = locale.language.languageCode
+            .map { .code($0.identifier) } ?? .detect
         let (text, stats) = try await recognizer.transcribe(
             pcm: samples,
-            overlapSeconds: overlapSeconds
+            overlapSeconds: overlapSeconds,
+            language: language
         )
 
         statsBox.withLock {

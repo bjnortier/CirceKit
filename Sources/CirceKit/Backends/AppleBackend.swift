@@ -15,7 +15,12 @@ internal final class AppleBackend: TranscriptionBackend {
     private let reportingOptions: Set<CirceTranscriber.ReportingOption>
     private let attributeOptions: Set<CirceTranscriber.ResultAttributeOption>
 
-    private let state = OSAllocatedUnfairLock<SpeechTranscriber?>(initialState: nil)
+    /// The locale Apple actually supports for ``locale``, resolved once in
+    /// ``prepare()``. The `SpeechTranscriber` itself is *not* cached: its results
+    /// sequence terminates when a run finalizes, so reusing one across runs would
+    /// yield no results the second time. Assets stay warm in the OS, so building a
+    /// fresh transcriber per run is cheap.
+    private let resolvedLocale = OSAllocatedUnfairLock<Locale?>(initialState: nil)
 
     init(
         locale: Locale,
@@ -32,8 +37,8 @@ internal final class AppleBackend: TranscriptionBackend {
     /// Apple negotiates its own format; CirceKit converts to whatever it asks for.
     var analyzerFormat: AVAudioFormat? {
         get async {
-            guard let transcriber = state.withLock({ $0 }) else { return nil }
-            return await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [transcriber])
+            guard let locale = resolvedLocale.withLock({ $0 }) else { return nil }
+            return await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [makeTranscriber(locale: locale)])
         }
     }
 
@@ -41,20 +46,24 @@ internal final class AppleBackend: TranscriptionBackend {
     var unsupportedOptions: Set<CirceTranscriber.ResultAttributeOption> { [] }
 
     func prepare() async throws {
-        guard state.withLock({ $0 }) == nil else { return }
+        guard resolvedLocale.withLock({ $0 }) == nil else { return }
 
         guard let resolved = await SpeechTranscriber.supportedLocale(equivalentTo: locale) else {
             throw CirceError.localeNotSupported(locale)
         }
 
-        let transcriber = SpeechTranscriber(
-            locale: resolved,
+        try await Self.ensureModel(for: makeTranscriber(locale: resolved), locale: resolved)
+        resolvedLocale.withLock { $0 = resolved }
+    }
+
+    /// A transcriber configured with this backend's options.
+    private func makeTranscriber(locale: Locale) -> SpeechTranscriber {
+        SpeechTranscriber(
+            locale: locale,
             transcriptionOptions: Set(transcriptionOptions.map(\.appleValue)),
             reportingOptions: Set(reportingOptions.map(\.appleValue)),
             attributeOptions: Set(attributeOptions.map(\.appleValue))
         )
-        try await Self.ensureModel(for: transcriber, locale: resolved)
-        state.withLock { $0 = transcriber }
     }
 
     func run(
@@ -62,10 +71,12 @@ internal final class AppleBackend: TranscriptionBackend {
         emit: @Sendable @escaping (CirceTranscriber.Result) -> Void
     ) async throws {
         try await prepare()
-        guard let transcriber = state.withLock({ $0 }) else {
+        guard let locale = resolvedLocale.withLock({ $0 }) else {
             throw CirceError.invalidState("Apple transcriber was not prepared")
         }
 
+        // A new transcriber and analyzer for every run — see `resolvedLocale`.
+        let transcriber = makeTranscriber(locale: locale)
         let analyzer = SpeechAnalyzer(modules: [transcriber])
         let format = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [transcriber])
 
@@ -90,14 +101,26 @@ internal final class AppleBackend: TranscriptionBackend {
                     for await input in inputs {
                         do {
                             let buffer = try converter?.convert(input.buffer) ?? input.buffer
+                            // A converted buffer's frame count no longer matches the
+                            // source timeline: resampling 44.1 kHz to the analyzer's
+                            // rate rounds per chunk, and the accumulated drift makes
+                            // the declared start times overlap, which the analyzer
+                            // rejects as disordered audio. Hand converted buffers over
+                            // without a timestamp and let the analyzer sequence them
+                            // contiguously, which is what Apple's own sample does.
+                            let startTime = converter == nil ? input.bufferStartTime : nil
                             continuation.yield(
-                                AnalyzerInput(buffer: buffer, bufferStartTime: input.bufferStartTime)
+                                AnalyzerInput(buffer: buffer, bufferStartTime: startTime)
                             )
                         } catch {
                             // A buffer that will not convert is dropped rather than
                             // failing the whole run; the analyzer sees a gap.
                             continue
                         }
+                    }
+                    // Drain the resampler's tail before ending the stream.
+                    if let tail = try? converter?.flush() ?? nil {
+                        continuation.yield(AnalyzerInput(buffer: tail, bufferStartTime: nil))
                     }
                     continuation.finish()
                 }

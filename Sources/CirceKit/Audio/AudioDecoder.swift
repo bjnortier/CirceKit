@@ -100,7 +100,8 @@ public nonisolated enum AudioDecoder {
         return floats(from: outputBuffer)
     }
 
-    private static func floats(from buffer: AVAudioPCMBuffer) -> [Float] {
+    /// The samples of a mono float32 buffer.
+    static func floats(from buffer: AVAudioPCMBuffer) -> [Float] {
         guard let channelData = buffer.floatChannelData else { return [] }
         return Array(UnsafeBufferPointer(start: channelData[0], count: Int(buffer.frameLength)))
     }

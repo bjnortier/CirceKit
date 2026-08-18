@@ -92,7 +92,12 @@ public actor CirceModelStore {
         to destination: URL,
         progress: (@Sendable (Double) -> Void)?
     ) async throws {
-        let (temporary, response) = try await URLSession.shared.download(from: url)
+        // `URLSession.download(from:)` reports nothing until it finishes, which is
+        // useless for a 1.6 GB model, so drive a delegate instead.
+        let (temporary, response) = try await ProgressReportingDownload.run(
+            url: url,
+            progress: progress
+        )
 
         // The temporary file is deleted when this scope exits unless it is moved.
         var moved = false
@@ -110,6 +115,75 @@ public actor CirceModelStore {
         try FileManager.default.moveItem(at: temporary, to: destination)
         moved = true
         progress?(1.0)
+    }
+}
+
+/// A one-shot download that reports byte progress as it goes.
+///
+/// Deliberately minimal: no background-session migration, no resume data. An app
+/// that needs a download to survive suspension should own that policy itself.
+private final class ProgressReportingDownload: NSObject, URLSessionDownloadDelegate, @unchecked Sendable {
+    private let progress: (@Sendable (Double) -> Void)?
+    private let lock = NSLock()
+    private var lastReported = -1.0
+    /// The delegate hands the temporary file over here; `download(for:)` returns
+    /// after the delegate has moved it somewhere durable.
+    private var relocated: URL?
+
+    private init(progress: (@Sendable (Double) -> Void)?) {
+        self.progress = progress
+    }
+
+    static func run(
+        url: URL,
+        progress: (@Sendable (Double) -> Void)?
+    ) async throws -> (URL, URLResponse) {
+        let delegate = ProgressReportingDownload(progress: progress)
+        let session = URLSession(configuration: .default, delegate: delegate, delegateQueue: nil)
+        defer { session.finishTasksAndInvalidate() }
+
+        let (temporary, response) = try await session.download(from: url)
+        // With a delegate attached, URLSession may have already consumed the file
+        // at `temporary`; prefer whatever the delegate moved aside.
+        if let relocated = delegate.lock.withLock({ delegate.relocated }) {
+            return (relocated, response)
+        }
+        return (temporary, response)
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        downloadTask: URLSessionDownloadTask,
+        didWriteData bytesWritten: Int64,
+        totalBytesWritten: Int64,
+        totalBytesExpectedToWrite: Int64
+    ) {
+        guard let progress, totalBytesExpectedToWrite > 0 else { return }
+        let fraction = min(1, Double(totalBytesWritten) / Double(totalBytesExpectedToWrite))
+        // Throttle to ~1% steps so a slow UI is not flooded with updates.
+        let shouldReport = lock.withLock {
+            guard fraction - lastReported >= 0.01 || fraction >= 1 else { return false }
+            lastReported = fraction
+            return true
+        }
+        if shouldReport { progress(fraction) }
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        downloadTask: URLSessionDownloadTask,
+        didFinishDownloadingTo location: URL
+    ) {
+        // `location` is only valid for the duration of this call, so move it to a
+        // temporary of our own that outlives the callback.
+        let destination = FileManager.default.temporaryDirectory
+            .appending(path: "CirceKitDownload-\(UUID().uuidString)")
+        do {
+            try FileManager.default.moveItem(at: location, to: destination)
+            lock.withLock { relocated = destination }
+        } catch {
+            // Leave `relocated` nil; the async `download(for:)` result is used.
+        }
     }
 }
 

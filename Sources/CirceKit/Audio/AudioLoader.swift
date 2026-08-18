@@ -65,9 +65,19 @@ public nonisolated enum AudioLoader {
     public static func collectPCM16kMono(
         from inputs: AsyncStream<CirceAnalyzerInput>
     ) async throws -> (samples: [Float], duration: CMTime) {
+        // One converter for the whole stream, not one per chunk: an
+        // `AVAudioConverter` carries resampler filter state, and rebuilding it per
+        // buffer discards that state at every boundary — audible artifacts and a
+        // drifting sample count when the source is not already 16 kHz mono.
+        let converter = BufferConverter(targetFormat: AudioDecoder.canonicalFormat)
         var samples: [Float] = []
         for await input in inputs {
-            samples.append(contentsOf: try AudioDecoder.pcm16kMono(from: input.buffer))
+            let converted = try converter.convert(input.buffer)
+            samples.append(contentsOf: AudioDecoder.floats(from: converted))
+        }
+        // Drain the resampler's tail, or the last fraction of a second is lost.
+        if let tail = try converter.flush() {
+            samples.append(contentsOf: AudioDecoder.floats(from: tail))
         }
         // Duration comes from the resampled count, so it matches what the engine sees.
         let duration = CMTime(

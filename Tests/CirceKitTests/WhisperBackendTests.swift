@@ -59,6 +59,46 @@ struct WhisperBackendTests {
         #expect(results.allSatisfy { $0.isFinal })
     }
 
+    /// whisper.cpp rounds segment ends to centiseconds and regularly reports a
+    /// last segment ending *past* the end of the audio — 10.00s for a 9.90s clip.
+    ///
+    /// Finalization used to be set to the audio duration, so those results came
+    /// back with `isFinal == false` and any caller filtering on it — including
+    /// ``CirceFileTranscriber`` — silently returned an empty transcript for a
+    /// perfectly good decode. One such sample in ten took a FLEURS English run
+    /// from 3.3% to 18.9% WER.
+    @Test(
+        "Results stay final when a segment overruns the audio",
+        arguments: [9.9, 10.4, 4.3, 7.7]
+    )
+    func finalWhenSegmentOverrunsAudio(seconds: Double) async throws {
+        let directory = URL.temporaryDirectory.appending(path: "circe-overrun-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        // Loop the JFK clip to an awkward length, so the last segment's rounded end
+        // is likely to sit beyond the true duration.
+        let url = directory.appending(path: "clip.wav")
+        try Self.writeClip(seconds: seconds, to: url)
+
+        let transcriber = CirceFileTranscriber(
+            backend: .whisperCPP(TestEnv.testModel),
+            locale: Locale(identifier: "en_US"),
+            preset: .transcription
+        )
+        let transcription = try await transcriber.transcribe(fileAt: url)
+
+        #expect(!transcription.results.isEmpty, "no results for a \(seconds)s clip")
+        // The invariant: a batch engine's output is final regardless of how its
+        // segment ends round relative to the audio length.
+        #expect(
+            transcription.results.allSatisfy { $0.isFinal },
+            "a result was left volatile for a \(seconds)s clip"
+        )
+        // And the joined transcript must actually survive the isFinal filter.
+        #expect(!transcription.text.isEmpty, "empty transcript for a \(seconds)s clip")
+    }
+
     @Test("Word timings land inside their segment")
     func wordTimingsAreAttached() async throws {
         let transcriber = CirceTranscriber(
@@ -104,4 +144,30 @@ struct WhisperBackendTests {
         }
         #expect(scored > 0, "expected per-token confidences")
     }
+
+    /// Writes a clip of `seconds` by looping the JFK sample.
+    ///
+    /// The `AVAudioFile` must go out of scope before the file is read: it
+    /// finalizes its header on deallocation, and a still-open writer leaves a
+    /// zero-length file behind.
+    private static func writeClip(seconds: Double, to url: URL) throws {
+        let base = try AudioDecoder.decodePCM16kMono(url: TestEnv.jfkURL)
+        var pcm: [Float] = []
+        let wanted = Int(seconds * AudioDecoder.targetSampleRate)
+        while pcm.count < wanted { pcm.append(contentsOf: base.prefix(wanted - pcm.count)) }
+
+        let format = AudioDecoder.canonicalFormat
+        guard let buffer = AVAudioPCMBuffer(
+            pcmFormat: format, frameCapacity: AVAudioFrameCount(pcm.count)
+        ) else {
+            throw AudioDecoder.DecodeError.bufferAllocationFailed
+        }
+        buffer.frameLength = AVAudioFrameCount(pcm.count)
+        pcm.withUnsafeBufferPointer {
+            buffer.floatChannelData![0].update(from: $0.baseAddress!, count: pcm.count)
+        }
+        let file = try AVAudioFile(forWriting: url, settings: format.settings)
+        try file.write(from: buffer)
+    }
+
 }

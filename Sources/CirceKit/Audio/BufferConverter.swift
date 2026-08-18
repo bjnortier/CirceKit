@@ -41,7 +41,11 @@ internal final class BufferConverter: @unchecked Sendable {
         }
 
         let ratio = targetFormat.sampleRate / inputFormat.sampleRate
-        let capacity = AVAudioFrameCount((Double(buffer.frameLength) * ratio).rounded(.up))
+        // Headroom matters: a resampler carries state between calls and can emit
+        // more than the nominal ratio for a given input. Sizing the output to
+        // exactly ceil(ratio x frames) leaves it unable to drain, so audio backs up
+        // inside the converter and the tail is silently lost.
+        let capacity = AVAudioFrameCount((Double(buffer.frameLength) * ratio).rounded(.up)) + 1_024
         guard let output = AVAudioPCMBuffer(pcmFormat: targetFormat, frameCapacity: capacity) else {
             throw AudioDecoder.DecodeError.bufferAllocationFailed
         }
@@ -59,5 +63,27 @@ internal final class BufferConverter: @unchecked Sendable {
         }
         if status == .error { throw error ?? AudioDecoder.DecodeError.converterCreationFailed }
         return output
+    }
+
+    /// Drains whatever the converter still holds after the last input buffer.
+    ///
+    /// Must be called at end of stream. A resampler keeps a filter tail beyond the
+    /// samples it has emitted, and without this the final fraction of a second is
+    /// dropped — enough for a transcriber to lose the last words.
+    func flush() throws -> AVAudioPCMBuffer? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let converter else { return nil }
+
+        guard let output = AVAudioPCMBuffer(pcmFormat: targetFormat, frameCapacity: 8_192) else {
+            throw AudioDecoder.DecodeError.bufferAllocationFailed
+        }
+        var error: NSError?
+        let status = converter.convert(to: output, error: &error) { _, statusPointer in
+            statusPointer.pointee = .endOfStream
+            return nil
+        }
+        if status == .error { throw error ?? AudioDecoder.DecodeError.converterCreationFailed }
+        return output.frameLength > 0 ? output : nil
     }
 }

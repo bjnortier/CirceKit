@@ -171,23 +171,12 @@ public final class CirceTranscriber: CirceSpeechModule {
         self.reportingOptions = reportingOptions
         self.attributeOptions = attributeOptions
 
-        switch backend {
-        case .apple:
-            engine = AppleBackend(
-                locale: locale,
-                transcriptionOptions: transcriptionOptions,
-                reportingOptions: reportingOptions,
-                attributeOptions: attributeOptions
-            )
-        case .coreAI(let model):
-            engine = CoreAIBackend(model: model)
-        case .whisperCPP(let model):
-            engine = WhisperBackend(
-                model: model,
-                locale: locale,
-                attributeOptions: attributeOptions
-            )
-        }
+        engine = backend.makeEngine(
+            locale: locale,
+            transcriptionOptions: transcriptionOptions,
+            reportingOptions: reportingOptions,
+            attributeOptions: attributeOptions
+        )
 
         (stream, continuation) = AsyncThrowingStream<Result, any Error>.makeStream()
     }
@@ -311,5 +300,38 @@ extension CirceTranscriber: AnalyzerAttachable {
     func cancelNow() async {
         runState.withLock { $0 }?.cancel()
         continuation.finish()
+    }
+}
+
+// MARK: - Engine construction
+
+extension CirceTranscriber.Backend {
+    /// Builds the engine that implements this backend.
+    ///
+    /// Shared by ``CirceTranscriber`` and ``CirceFileTranscriber`` so the two
+    /// entry points can never drift on how a backend is configured.
+    internal func makeEngine(
+        locale: Locale,
+        transcriptionOptions: Set<CirceTranscriber.TranscriptionOption>,
+        reportingOptions: Set<CirceTranscriber.ReportingOption>,
+        attributeOptions: Set<CirceTranscriber.ResultAttributeOption>
+    ) -> any TranscriptionBackend {
+        switch self {
+        case .apple:
+            AppleBackend(
+                locale: locale,
+                transcriptionOptions: transcriptionOptions,
+                reportingOptions: reportingOptions,
+                attributeOptions: attributeOptions
+            )
+        case .coreAI(let model):
+            CoreAIBackend(model: model, locale: locale)
+        case .whisperCPP(let model):
+            WhisperBackend(
+                model: model,
+                locale: locale,
+                attributeOptions: attributeOptions
+            )
+        }
     }
 }
