@@ -26,7 +26,9 @@ public struct CoreAIDecodeStats: Sendable, Equatable {
 /// pretending otherwise.
 internal final class CoreAIBackend: TranscriptionBackend {
     private let model: CoreAIModel
-    private let locale: Locale
+    /// The language named on each decode. Mutable because the loaded model is
+    /// language-agnostic — see ``retarget(locale:)``.
+    private let localeBox: OSAllocatedUnfairLock<Locale>
     private let computeUnits: CoreAIComputeUnits
     private let overlapSeconds: Double
     private let state = OSAllocatedUnfairLock<SpeechRecognitionModel?>(initialState: nil)
@@ -39,7 +41,7 @@ internal final class CoreAIBackend: TranscriptionBackend {
         overlapSeconds: Double = SpeechRecognitionModel.defaultOverlapSeconds
     ) {
         self.model = model
-        self.locale = locale
+        self.localeBox = OSAllocatedUnfairLock(initialState: locale)
         self.computeUnits = computeUnits
         self.overlapSeconds = overlapSeconds
     }
@@ -77,6 +79,13 @@ internal final class CoreAIBackend: TranscriptionBackend {
         state.withLock { $0 = recognizer }
     }
 
+    /// The loaded graph is language-agnostic: the language is a decoder prefix
+    /// chosen per transcription, so a new one costs nothing.
+    func retarget(locale: Locale) -> Bool {
+        localeBox.withLock { $0 = locale }
+        return true
+    }
+
     func run(
         inputs: AsyncStream<CirceAnalyzerInput>,
         emit: @Sendable @escaping (CirceTranscriber.Result) -> Void
@@ -94,7 +103,7 @@ internal final class CoreAIBackend: TranscriptionBackend {
         // pick wrong on short or noisy audio. Whisper exports transcribe an
         // unnamed language as if it were the one they were pinned to, so getting
         // this wrong is silent.
-        let language: SpeechLanguage = locale.language.languageCode
+        let language: SpeechLanguage = localeBox.withLock({ $0 }).language.languageCode
             .map { .code($0.identifier) } ?? .detect
         let (text, stats) = try await recognizer.transcribe(
             pcm: samples,

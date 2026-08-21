@@ -127,7 +127,9 @@ private actor WhisperContext {
 /// `.audioTimeRange` and `.transcriptionConfidence` are both supported.
 internal final class WhisperBackend: TranscriptionBackend {
     private let model: WhisperModel
-    private let locale: Locale
+    /// The language passed to `whisper_full`. Mutable because the loaded context
+    /// is multilingual — see ``retarget(locale:)``.
+    private let localeBox: OSAllocatedUnfairLock<Locale>
     private let attributeOptions: Set<CirceTranscriber.ResultAttributeOption>
     private let store: CirceModelStore
 
@@ -156,7 +158,7 @@ internal final class WhisperBackend: TranscriptionBackend {
         store: CirceModelStore = .shared
     ) {
         self.model = model
-        self.locale = locale
+        self.localeBox = OSAllocatedUnfairLock(initialState: locale)
         self.attributeOptions = attributeOptions
         self.store = store
     }
@@ -221,7 +223,18 @@ internal final class WhisperBackend: TranscriptionBackend {
     private var languageCode: String? {
         // English-only models reject anything but "en".
         if model.isEnglishOnly { return "en" }
-        return locale.language.languageCode?.identifier
+        return localeBox.withLock({ $0 }).language.languageCode?.identifier
+    }
+
+    /// The loaded context is multilingual and takes the language per call, so a
+    /// new one costs nothing — except on an English-only model, where anything
+    /// but English is refused rather than silently transcribed as English.
+    func retarget(locale: Locale) -> Bool {
+        guard !model.isEnglishOnly || locale.language.languageCode?.identifier == "en" else {
+            return false
+        }
+        localeBox.withLock { $0 = locale }
+        return true
     }
 
     /// Builds the segment text, attaching per-token time and confidence runs when

@@ -29,4 +29,22 @@ internal protocol TranscriptionBackend: AnyObject, Sendable {
 
     /// Requested options this engine cannot deliver.
     var unsupportedOptions: Set<CirceTranscriber.ResultAttributeOption> { get }
+
+    /// Points the *next* run at another language, without reloading the model.
+    ///
+    /// The batch engines name the language per transcription — a Whisper decoder
+    /// prefix, a whisper.cpp parameter — so one loaded model serves every
+    /// language and only this argument changes. Apple's does not: its locale is
+    /// fixed when the transcriber and its assets are chosen.
+    ///
+    /// Returns whether the engine can honour the change. `false` means the
+    /// caller must build a transcriber per locale; it must never mean the run
+    /// quietly proceeds in the wrong language, which scores like a broken model
+    /// rather than failing.
+    func retarget(locale: Locale) -> Bool
+}
+
+extension TranscriptionBackend {
+    /// Engines whose language is fixed at construction opt out by default.
+    func retarget(locale: Locale) -> Bool { false }
 }

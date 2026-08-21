@@ -41,6 +41,11 @@ public actor CirceFileTranscriber {
 
     private let engine: any TranscriptionBackend
     private var isPrepared = false
+    /// The language the engine is currently set to, which is the construction
+    /// locale until ``transcribe(fileAt:locale:)`` moves it. Tracked rather than
+    /// compared against ``locale``, so a transcriber that ran one file in French
+    /// goes back to its own locale for the next one instead of staying there.
+    private var activeLocale: Locale
 
     public init(
         backend: CirceTranscriber.Backend,
@@ -68,6 +73,7 @@ public actor CirceFileTranscriber {
     ) {
         self.backend = backend
         self.locale = locale
+        self.activeLocale = locale
         self.attributeOptions = attributeOptions
         self.coreAIComputeUnits = coreAIComputeUnits
         self.engine = backend.makeEngine(
@@ -93,7 +99,36 @@ public actor CirceFileTranscriber {
     ///
     /// Safe to call repeatedly; the actor serializes runs.
     public func transcribe(fileAt url: URL) async throws -> CirceTranscription {
+        try await transcribe(fileAt: url, locale: locale)
+    }
+
+    /// Transcribes one file in `locale`, reusing the loaded model.
+    ///
+    /// A batch engine names the language on each transcription rather than
+    /// baking it into the model it loaded, so a corpus that spans languages can
+    /// be run through one loaded model — which for a Core AI bundle saves
+    /// seconds of load and a gigabyte of resident model per language.
+    ///
+    /// Throws ``CirceError/invalidState(_:)`` when the engine cannot change
+    /// language — Apple's transcriber, or an English-only whisper.cpp model.
+    /// Deliberately loud: an engine given the wrong language does not fail, it
+    /// transcribes as if the audio were in the language it was told, and scores
+    /// like a broken model.
+    public func transcribe(fileAt url: URL, locale: Locale) async throws -> CirceTranscription {
         try await prepare()
+
+        if locale.identifier(.bcp47) != activeLocale.identifier(.bcp47) {
+            guard engine.retarget(locale: locale) else {
+                throw CirceError.invalidState(
+                    """
+                    This backend cannot change language after it is built — \
+                    construct a transcriber for \(locale.identifier(.bcp47)) instead \
+                    of retargeting one built for \(self.locale.identifier(.bcp47)).
+                    """
+                )
+            }
+            activeLocale = locale
+        }
 
         let file = try AVAudioFile(forReading: url)
         let duration = AudioLoader.duration(of: file)
