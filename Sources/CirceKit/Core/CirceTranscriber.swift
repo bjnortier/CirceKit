@@ -142,19 +142,27 @@ public final class CirceTranscriber: CirceSpeechModule {
     public let transcriptionOptions: Set<TranscriptionOption>
     public let reportingOptions: Set<ReportingOption>
     public let attributeOptions: Set<ResultAttributeOption>
+    /// Compute-unit policy for a ``Backend/coreAI(_:)`` backend; ignored by the others.
+    public let coreAIComputeUnits: CoreAIComputeUnits
 
     private let engine: any TranscriptionBackend
     private let stream: AsyncThrowingStream<Result, any Error>
     private let continuation: AsyncThrowingStream<Result, any Error>.Continuation
     private let runState = OSAllocatedUnfairLock<Task<Void, any Error>?>(initialState: nil)
 
-    public convenience init(backend: Backend, locale: Locale = .current, preset: Preset = .transcription) {
+    public convenience init(
+        backend: Backend,
+        locale: Locale = .current,
+        preset: Preset = .transcription,
+        coreAIComputeUnits: CoreAIComputeUnits = .default
+    ) {
         self.init(
             backend: backend,
             locale: locale,
             transcriptionOptions: preset.transcriptionOptions,
             reportingOptions: preset.reportingOptions,
-            attributeOptions: preset.attributeOptions
+            attributeOptions: preset.attributeOptions,
+            coreAIComputeUnits: coreAIComputeUnits
         )
     }
 
@@ -163,19 +171,22 @@ public final class CirceTranscriber: CirceSpeechModule {
         locale: Locale = .current,
         transcriptionOptions: Set<TranscriptionOption> = [],
         reportingOptions: Set<ReportingOption> = [],
-        attributeOptions: Set<ResultAttributeOption> = []
+        attributeOptions: Set<ResultAttributeOption> = [],
+        coreAIComputeUnits: CoreAIComputeUnits = .default
     ) {
         self.backend = backend
         self.locale = locale
         self.transcriptionOptions = transcriptionOptions
         self.reportingOptions = reportingOptions
         self.attributeOptions = attributeOptions
+        self.coreAIComputeUnits = coreAIComputeUnits
 
         engine = backend.makeEngine(
             locale: locale,
             transcriptionOptions: transcriptionOptions,
             reportingOptions: reportingOptions,
-            attributeOptions: attributeOptions
+            attributeOptions: attributeOptions,
+            coreAIComputeUnits: coreAIComputeUnits
         )
 
         (stream, continuation) = AsyncThrowingStream<Result, any Error>.makeStream()
@@ -314,7 +325,8 @@ extension CirceTranscriber.Backend {
         locale: Locale,
         transcriptionOptions: Set<CirceTranscriber.TranscriptionOption>,
         reportingOptions: Set<CirceTranscriber.ReportingOption>,
-        attributeOptions: Set<CirceTranscriber.ResultAttributeOption>
+        attributeOptions: Set<CirceTranscriber.ResultAttributeOption>,
+        coreAIComputeUnits: CoreAIComputeUnits
     ) -> any TranscriptionBackend {
         switch self {
         case .apple:
@@ -325,7 +337,7 @@ extension CirceTranscriber.Backend {
                 attributeOptions: attributeOptions
             )
         case .coreAI(let model):
-            CoreAIBackend(model: model, locale: locale)
+            CoreAIBackend(model: model, locale: locale, computeUnits: coreAIComputeUnits)
         case .whisperCPP(let model):
             WhisperBackend(
                 model: model,

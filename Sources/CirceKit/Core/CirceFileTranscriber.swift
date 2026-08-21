@@ -36,6 +36,8 @@ public actor CirceFileTranscriber {
     public let backend: CirceTranscriber.Backend
     public let locale: Locale
     public let attributeOptions: Set<CirceTranscriber.ResultAttributeOption>
+    /// Compute-unit policy for a Core AI backend; ignored by the others.
+    public let coreAIComputeUnits: CoreAIComputeUnits
 
     private let engine: any TranscriptionBackend
     private var isPrepared = false
@@ -43,14 +45,16 @@ public actor CirceFileTranscriber {
     public init(
         backend: CirceTranscriber.Backend,
         locale: Locale = .current,
-        preset: CirceTranscriber.Preset = .transcription
+        preset: CirceTranscriber.Preset = .transcription,
+        coreAIComputeUnits: CoreAIComputeUnits = .default
     ) {
         self.init(
             backend: backend,
             locale: locale,
             transcriptionOptions: preset.transcriptionOptions,
             reportingOptions: preset.reportingOptions,
-            attributeOptions: preset.attributeOptions
+            attributeOptions: preset.attributeOptions,
+            coreAIComputeUnits: coreAIComputeUnits
         )
     }
 
@@ -59,16 +63,19 @@ public actor CirceFileTranscriber {
         locale: Locale = .current,
         transcriptionOptions: Set<CirceTranscriber.TranscriptionOption> = [],
         reportingOptions: Set<CirceTranscriber.ReportingOption> = [],
-        attributeOptions: Set<CirceTranscriber.ResultAttributeOption> = []
+        attributeOptions: Set<CirceTranscriber.ResultAttributeOption> = [],
+        coreAIComputeUnits: CoreAIComputeUnits = .default
     ) {
         self.backend = backend
         self.locale = locale
         self.attributeOptions = attributeOptions
+        self.coreAIComputeUnits = coreAIComputeUnits
         self.engine = backend.makeEngine(
             locale: locale,
             transcriptionOptions: transcriptionOptions,
             reportingOptions: reportingOptions,
-            attributeOptions: attributeOptions
+            attributeOptions: attributeOptions,
+            coreAIComputeUnits: coreAIComputeUnits
         )
     }
 

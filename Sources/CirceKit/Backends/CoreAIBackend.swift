@@ -27,6 +27,7 @@ public struct CoreAIDecodeStats: Sendable, Equatable {
 internal final class CoreAIBackend: TranscriptionBackend {
     private let model: CoreAIModel
     private let locale: Locale
+    private let computeUnits: CoreAIComputeUnits
     private let overlapSeconds: Double
     private let state = OSAllocatedUnfairLock<SpeechRecognitionModel?>(initialState: nil)
     private let statsBox = OSAllocatedUnfairLock<CoreAIDecodeStats?>(initialState: nil)
@@ -34,10 +35,12 @@ internal final class CoreAIBackend: TranscriptionBackend {
     init(
         model: CoreAIModel,
         locale: Locale = .current,
+        computeUnits: CoreAIComputeUnits = .default,
         overlapSeconds: Double = SpeechRecognitionModel.defaultOverlapSeconds
     ) {
         self.model = model
         self.locale = locale
+        self.computeUnits = computeUnits
         self.overlapSeconds = overlapSeconds
     }
 
@@ -68,7 +71,9 @@ internal final class CoreAIBackend: TranscriptionBackend {
         let bundleURL = try model.requireURL()
         // Expensive: loads the bundle, specializes the graph, and warms up.
         // Doing it here means it happens once, not per transcription.
-        let recognizer = try await SpeechRecognitionModel(resourcesAt: bundleURL, computeUnits: .default)
+        let recognizer = try await SpeechRecognitionModel(
+            resourcesAt: bundleURL, computeUnits: computeUnits.coreAIValue
+        )
         state.withLock { $0 = recognizer }
     }
 
