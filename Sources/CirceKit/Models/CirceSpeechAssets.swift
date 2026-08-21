@@ -53,6 +53,42 @@ public enum CirceSpeechAssets {
         await AssetInventory.release(reservedLocale: locale)
     }
 
+    /// Claims a slot for `locale` unless this app already holds one.
+    ///
+    /// Apple wants a reservation for every locale the transcriber *uses*, not
+    /// only for one it downloads. A locale that was already installed — the
+    /// device's own, typically — otherwise logs *"Cannot use modules with
+    /// unallocated locales … This will be an error in a future release!"* on
+    /// every run, and is documented to stop working.
+    ///
+    /// Reservations are made against Apple's own equivalent of `locale` — a slot
+    /// for `es-419` is refused, while `es-US` is accepted — so the resolved
+    /// locale is what comes back and what a later ``release(locale:)`` needs.
+    ///
+    /// - Returns: the locale reserved by this call, or `nil` when the app already
+    ///   held the slot and nothing was taken, so a caller unwinding an error
+    ///   gives back only a reservation it actually made.
+    @discardableResult
+    public static func reserveIfNeeded(locale: Locale) async throws -> Locale? {
+        guard let resolved = await supportedLocale(equivalentTo: locale) else {
+            throw CirceError.localeNotSupported(locale)
+        }
+        let identifier = resolved.identifier(.bcp47)
+        if await reservedLocales.contains(where: { $0.identifier(.bcp47) == identifier }) {
+            return nil
+        }
+        guard try await reserve(locale: resolved) else {
+            throw CirceError.modelUnavailable(
+                """
+                Reservation limit reached — this device keeps at most \
+                \(maximumReservedLocales) speech locales reserved, so \(identifier) \
+                cannot be used until one is released.
+                """
+            )
+        }
+        return resolved
+    }
+
     /// Releases every reservation this app holds.
     public static func releaseAllReservations() async {
         for locale in await reservedLocales {
@@ -64,7 +100,8 @@ public enum CirceSpeechAssets {
     ///
     /// Reserves a slot first and releases it again if anything fails, so a failed
     /// install does not leak one of the device's limited reservations. Returns
-    /// immediately when the assets are already present.
+    /// once the assets are present — but only after reserving, because assets
+    /// that are already installed still need a slot to be used.
     public static func install(
         locale: Locale,
         progress progressHandler: (@Sendable (Double) -> Void)? = nil
@@ -72,21 +109,13 @@ public enum CirceSpeechAssets {
         guard let resolved = await supportedLocale(equivalentTo: locale) else {
             throw CirceError.localeNotSupported(locale)
         }
-        if await isInstalled(resolved) {
-            progressHandler?(1.0)
-            return
-        }
 
-        var didReserve = false
+        var claimed: Locale?
         do {
-            didReserve = try await reserve(locale: resolved)
-            guard didReserve else {
-                throw CirceError.modelUnavailable(
-                    """
-                    Reservation limit reached — this device keeps at most \
-                    \(maximumReservedLocales) speech locales installed.
-                    """
-                )
+            claimed = try await reserveIfNeeded(locale: resolved)
+            if await isInstalled(resolved) {
+                progressHandler?(1.0)
+                return
             }
 
             let transcriber = SpeechTranscriber(
@@ -119,7 +148,7 @@ public enum CirceSpeechAssets {
             try await request.downloadAndInstall()
             progressHandler?(1.0)
         } catch {
-            if didReserve { _ = await release(locale: resolved) }
+            if let claimed { _ = await release(locale: claimed) }
             throw error
         }
     }

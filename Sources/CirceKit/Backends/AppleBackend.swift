@@ -141,15 +141,29 @@ internal final class AppleBackend: TranscriptionBackend {
         try await collector.value
     }
 
-    /// Ensures the locale's assets are installed, downloading them if needed.
+    /// Ensures the locale holds a reservation and its assets are installed,
+    /// downloading them if needed.
+    ///
+    /// The reservation comes first and happens even when the assets are already
+    /// on the device: Apple requires a slot to *use* a locale, and without one
+    /// every run logs *"Cannot use modules with unallocated locales"*, which is
+    /// documented to become an error.
     private static func ensureModel(for transcriber: SpeechTranscriber, locale: Locale) async throws {
-        let installed = await SpeechTranscriber.installedLocales
-        let identifier = locale.identifier(.bcp47)
-        if installed.contains(where: { $0.identifier(.bcp47) == identifier }) { return }
+        let claimed = try await CirceSpeechAssets.reserveIfNeeded(locale: locale)
+        do {
+            let installed = await SpeechTranscriber.installedLocales
+            let identifier = locale.identifier(.bcp47)
+            if installed.contains(where: { $0.identifier(.bcp47) == identifier }) { return }
 
-        // A nil request means the assets are already present.
-        if let request = try await AssetInventory.assetInstallationRequest(supporting: [transcriber]) {
-            try await request.downloadAndInstall()
+            // A nil request means the assets are already present.
+            if let request = try await AssetInventory.assetInstallationRequest(supporting: [transcriber]) {
+                try await request.downloadAndInstall()
+            }
+        } catch {
+            // Don't leak one of the device's few slots on a failed download; a
+            // reservation that was already held is left alone.
+            if let claimed { await CirceSpeechAssets.release(locale: claimed) }
+            throw error
         }
     }
 }
