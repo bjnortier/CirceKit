@@ -8,7 +8,12 @@ import Foundation
 /// cases resolve against a local exports directory; use ``bundle(_:)`` to point
 /// at one directly.
 public enum CoreAIModel: Sendable, Equatable, Hashable {
-    /// Parakeet TDT 0.6B v3, float32, static 30 s encoder.
+    /// Parakeet TDT 0.6B v3, float16, static 30 s encoder.
+    ///
+    /// float16 rather than float32: measured on Mac it is 2.7x faster end to end
+    /// (39.4 ms against 105.7 ms on an 11 s clip) and it is the only one of the two
+    /// the Neural Engine can run at all, since there is no f32 path there. It is also
+    /// the bundle CirceBench downloads, so the named case and the app now agree.
     case parakeetTDT06BV3
 
     /// Whisper large-v3-turbo with KV cache, float16.
@@ -38,7 +43,7 @@ public enum CoreAIModel: Sendable, Equatable, Hashable {
     /// The bundle directory name within the exports directory, for named cases.
     public var bundleName: String? {
         switch self {
-        case .parakeetTDT06BV3: return "parakeet-tdt-0.6b-v3_float32_static"
+        case .parakeetTDT06BV3: return "parakeet-tdt-0.6b-v3_float16_static"
         case .whisperLargeV3Turbo: return "whisper-large-v3-turbo-kv_float16"
         case .bundle: return nil
         }
