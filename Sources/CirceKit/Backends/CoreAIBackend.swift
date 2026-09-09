@@ -18,7 +18,9 @@ public struct CoreAIDecodeStats: Sendable, Equatable {
 
 /// Core AI backend, wrapping `CoreAISpeech.SpeechRecognitionModel`.
 ///
-/// Collects the input audio before inference. With volatile reporting enabled,
+/// Collects the input audio before inference. Can decode a Whisper export with
+/// either of Whisper's two tasks — transcribe, or translate to English — through
+/// `translatesToEnglish`. With volatile reporting enabled,
 /// emits whole-transcript replacement snapshots during Parakeet decoding and
 /// after each audio window, followed by one final result. Word timing and
 /// confidence attributes remain unsupported.
@@ -30,6 +32,8 @@ internal final class CoreAIBackend: TranscriptionBackend {
     private let computeUnits: CoreAIComputeUnits
     private let overlapSeconds: Double
     private let reportsPartials: Bool
+    /// Whether to decode with Whisper's `<|translate|>` task instead of `<|transcribe|>`.
+    private let translatesToEnglish: Bool
     private let state = OSAllocatedUnfairLock<SpeechRecognitionModel?>(initialState: nil)
     private let statsBox = OSAllocatedUnfairLock<CoreAIDecodeStats?>(initialState: nil)
 
@@ -38,13 +42,15 @@ internal final class CoreAIBackend: TranscriptionBackend {
         locale: Locale = .current,
         computeUnits: CoreAIComputeUnits = .default,
         overlapSeconds: Double = SpeechRecognitionModel.defaultOverlapSeconds,
-        reportsPartials: Bool = false
+        reportsPartials: Bool = false,
+        translatesToEnglish: Bool = false
     ) {
         self.model = model
         self.localeBox = OSAllocatedUnfairLock(initialState: locale)
         self.computeUnits = computeUnits
         self.overlapSeconds = overlapSeconds
         self.reportsPartials = reportsPartials
+        self.translatesToEnglish = translatesToEnglish
     }
 
     /// Core AI wants 16 kHz mono float, same as whisper.cpp.
@@ -120,10 +126,16 @@ internal final class CoreAIBackend: TranscriptionBackend {
         } else {
             onPartial = nil
         }
+        // The language stays the *spoken* one when translating: `<|translate|>`
+        // goes into the task slot beside it, and Whisper only ever translates into
+        // English. Parakeet has no task slot and throws rather than handing back an
+        // untranslated transcript.
         let (text, stats) = try await recognizer.transcribe(
             pcm: samples,
             overlapSeconds: overlapSeconds,
-            language: language, onPartial: onPartial
+            language: language,
+            task: translatesToEnglish ? .translateToEnglish : .transcribe,
+            onPartial: onPartial
         )
 
         statsBox.withLock {

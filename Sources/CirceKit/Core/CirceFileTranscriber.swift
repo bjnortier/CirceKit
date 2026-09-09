@@ -38,6 +38,12 @@ public actor CirceFileTranscriber {
     public let attributeOptions: Set<CirceTranscriber.ResultAttributeOption>
     /// Compute-unit policy for a Core AI backend; ignored by the others.
     public let coreAIComputeUnits: CoreAIComputeUnits
+    /// Translate each file into English instead of transcribing it as spoken.
+    ///
+    /// See ``CirceTranscriber/translatesToEnglish``. The per-file `locale` still
+    /// names the language being *spoken*, so a mixed-language corpus translates
+    /// the same way it transcribes: one loaded model, the language named per file.
+    public let translatesToEnglish: Bool
 
     private let engine: any TranscriptionBackend
     private var isPrepared = false
@@ -51,7 +57,8 @@ public actor CirceFileTranscriber {
         backend: CirceTranscriber.Backend,
         locale: Locale = .current,
         preset: CirceTranscriber.Preset = .transcription,
-        coreAIComputeUnits: CoreAIComputeUnits = .default
+        coreAIComputeUnits: CoreAIComputeUnits = .default,
+        translatesToEnglish: Bool = false
     ) {
         self.init(
             backend: backend,
@@ -59,7 +66,8 @@ public actor CirceFileTranscriber {
             transcriptionOptions: preset.transcriptionOptions,
             reportingOptions: preset.reportingOptions,
             attributeOptions: preset.attributeOptions,
-            coreAIComputeUnits: coreAIComputeUnits
+            coreAIComputeUnits: coreAIComputeUnits,
+            translatesToEnglish: translatesToEnglish
         )
     }
 
@@ -69,19 +77,22 @@ public actor CirceFileTranscriber {
         transcriptionOptions: Set<CirceTranscriber.TranscriptionOption> = [],
         reportingOptions: Set<CirceTranscriber.ReportingOption> = [],
         attributeOptions: Set<CirceTranscriber.ResultAttributeOption> = [],
-        coreAIComputeUnits: CoreAIComputeUnits = .default
+        coreAIComputeUnits: CoreAIComputeUnits = .default,
+        translatesToEnglish: Bool = false
     ) {
         self.backend = backend
         self.locale = locale
         self.activeLocale = locale
         self.attributeOptions = attributeOptions
         self.coreAIComputeUnits = coreAIComputeUnits
+        self.translatesToEnglish = translatesToEnglish
         self.engine = backend.makeEngine(
             locale: locale,
             transcriptionOptions: transcriptionOptions,
             reportingOptions: reportingOptions,
             attributeOptions: attributeOptions,
-            coreAIComputeUnits: coreAIComputeUnits
+            coreAIComputeUnits: coreAIComputeUnits,
+            translatesToEnglish: translatesToEnglish
         )
     }
 
@@ -91,6 +102,7 @@ public actor CirceFileTranscriber {
     /// explicitly before a batch so the first file is not also a model load.
     public func prepare() async throws {
         guard !isPrepared else { return }
+        try backend.validateTranslation(translatesToEnglish)
         try await engine.prepare()
         isPrepared = true
     }

@@ -153,6 +153,14 @@ public final class CirceTranscriber: CirceSpeechModule {
     public let attributeOptions: Set<ResultAttributeOption>
     /// Compute-unit policy for a ``Backend/coreAI(_:)`` backend; ignored by the others.
     public let coreAIComputeUnits: CoreAIComputeUnits
+    /// Translate the audio into English instead of transcribing it as spoken.
+    ///
+    /// A Core AI **Whisper** export only: the task is one token of Whisper's
+    /// decoder prefix, and Whisper's translation task has English as its only
+    /// target — ``locale`` still names the language being *spoken*. Every other
+    /// backend rejects this at ``prepare()`` rather than quietly transcribing;
+    /// see ``Backend/canTranslateToEnglish``.
+    public let translatesToEnglish: Bool
 
     private let engine: any TranscriptionBackend
     private let stream: AsyncThrowingStream<Result, any Error>
@@ -163,7 +171,8 @@ public final class CirceTranscriber: CirceSpeechModule {
         backend: Backend,
         locale: Locale = .current,
         preset: Preset = .transcription,
-        coreAIComputeUnits: CoreAIComputeUnits = .default
+        coreAIComputeUnits: CoreAIComputeUnits = .default,
+        translatesToEnglish: Bool = false
     ) {
         self.init(
             backend: backend,
@@ -171,7 +180,8 @@ public final class CirceTranscriber: CirceSpeechModule {
             transcriptionOptions: preset.transcriptionOptions,
             reportingOptions: preset.reportingOptions,
             attributeOptions: preset.attributeOptions,
-            coreAIComputeUnits: coreAIComputeUnits
+            coreAIComputeUnits: coreAIComputeUnits,
+            translatesToEnglish: translatesToEnglish
         )
     }
 
@@ -181,7 +191,8 @@ public final class CirceTranscriber: CirceSpeechModule {
         transcriptionOptions: Set<TranscriptionOption> = [],
         reportingOptions: Set<ReportingOption> = [],
         attributeOptions: Set<ResultAttributeOption> = [],
-        coreAIComputeUnits: CoreAIComputeUnits = .default
+        coreAIComputeUnits: CoreAIComputeUnits = .default,
+        translatesToEnglish: Bool = false
     ) {
         self.backend = backend
         self.locale = locale
@@ -189,13 +200,15 @@ public final class CirceTranscriber: CirceSpeechModule {
         self.reportingOptions = reportingOptions
         self.attributeOptions = attributeOptions
         self.coreAIComputeUnits = coreAIComputeUnits
+        self.translatesToEnglish = translatesToEnglish
 
         engine = backend.makeEngine(
             locale: locale,
             transcriptionOptions: transcriptionOptions,
             reportingOptions: reportingOptions,
             attributeOptions: attributeOptions,
-            coreAIComputeUnits: coreAIComputeUnits
+            coreAIComputeUnits: coreAIComputeUnits,
+            translatesToEnglish: translatesToEnglish
         )
 
         (stream, continuation) = AsyncThrowingStream<Result, any Error>.makeStream()
@@ -222,6 +235,7 @@ public final class CirceTranscriber: CirceSpeechModule {
 
     /// Loads models and warms up, so the first transcription is not also a download.
     public func prepare() async throws {
+        try backend.validateTranslation(translatesToEnglish)
         try await engine.prepare()
     }
 
@@ -295,6 +309,10 @@ extension CirceTranscriber: AnalyzerAttachable {
         guard runState.withLock({ $0 }) == nil else {
             throw CirceError.invalidState("this transcriber is already running")
         }
+        // Checked here as well as in `prepare()`: a run started through the analyzer
+        // never calls `prepare()` itself, and a request to translate that reached the
+        // engine unhonoured would come back as a fluent transcript in the wrong language.
+        try backend.validateTranslation(translatesToEnglish)
         let continuation = self.continuation
         let engine = self.engine
         let task = Task {
@@ -326,6 +344,34 @@ extension CirceTranscriber: AnalyzerAttachable {
 // MARK: - Engine construction
 
 extension CirceTranscriber.Backend {
+    /// Whether this backend can translate its audio into English.
+    ///
+    /// Core AI only, and there only for a Whisper export — the task is a token of
+    /// Whisper's decoder prefix. Parakeet has no such slot, and neither Apple's
+    /// transcriber nor this package's whisper.cpp backend exposes one. Whether a
+    /// given Core AI bundle is Whisper is not knowable until it is loaded, so that
+    /// half of the check belongs to `CoreAISpeech`, which throws on the decode.
+    public var canTranslateToEnglish: Bool {
+        if case .coreAI = self { return true }
+        return false
+    }
+
+    /// Throws unless `translatesToEnglish` is something this backend can honour.
+    ///
+    /// Loud rather than ignored, for the same reason ``TranscriptionBackend/retarget(locale:)``
+    /// reports failure: a translation request that is silently dropped comes back
+    /// as a fluent transcript in the source language, which reads as a working run.
+    internal func validateTranslation(_ translatesToEnglish: Bool) throws {
+        guard translatesToEnglish, !canTranslateToEnglish else { return }
+        throw CirceError.invalidState(
+            """
+            This backend cannot translate to English — that is Whisper's \
+            `<|translate|>` decoder task, which only the Core AI backend exposes. \
+            Transcribe with this backend, or choose a Core AI Whisper export.
+            """
+        )
+    }
+
     /// Builds the engine that implements this backend.
     ///
     /// Shared by ``CirceTranscriber`` and ``CirceFileTranscriber`` so the two
@@ -335,7 +381,8 @@ extension CirceTranscriber.Backend {
         transcriptionOptions: Set<CirceTranscriber.TranscriptionOption>,
         reportingOptions: Set<CirceTranscriber.ReportingOption>,
         attributeOptions: Set<CirceTranscriber.ResultAttributeOption>,
-        coreAIComputeUnits: CoreAIComputeUnits
+        coreAIComputeUnits: CoreAIComputeUnits,
+        translatesToEnglish: Bool = false
     ) -> any TranscriptionBackend {
         switch self {
         case .apple:
@@ -348,7 +395,8 @@ extension CirceTranscriber.Backend {
         case .coreAI(let model):
             CoreAIBackend(
                 model: model, locale: locale, computeUnits: coreAIComputeUnits,
-                reportsPartials: reportingOptions.contains(.volatileResults))
+                reportsPartials: reportingOptions.contains(.volatileResults),
+                translatesToEnglish: translatesToEnglish)
         case .whisperCPP(let model):
             WhisperBackend(
                 model: model,
