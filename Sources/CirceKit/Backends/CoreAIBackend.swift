@@ -18,12 +18,10 @@ public struct CoreAIDecodeStats: Sendable, Equatable {
 
 /// Core AI backend, wrapping `CoreAISpeech.SpeechRecognitionModel`.
 ///
-/// The least capable of the three engines by interface: it is batch-only, has no
-/// locale selection (the language is baked into the export), and produces no
-/// timing or confidence information at all. So this backend accumulates the
-/// stream, runs one decode, and emits a single final result spanning the whole
-/// clip — and reports both attribute options as unsupported rather than
-/// pretending otherwise.
+/// Collects the input audio before inference. With volatile reporting enabled,
+/// emits whole-transcript replacement snapshots during Parakeet decoding and
+/// after each audio window, followed by one final result. Word timing and
+/// confidence attributes remain unsupported.
 internal final class CoreAIBackend: TranscriptionBackend {
     private let model: CoreAIModel
     /// The language named on each decode. Mutable because the loaded model is
@@ -31,6 +29,7 @@ internal final class CoreAIBackend: TranscriptionBackend {
     private let localeBox: OSAllocatedUnfairLock<Locale>
     private let computeUnits: CoreAIComputeUnits
     private let overlapSeconds: Double
+    private let reportsPartials: Bool
     private let state = OSAllocatedUnfairLock<SpeechRecognitionModel?>(initialState: nil)
     private let statsBox = OSAllocatedUnfairLock<CoreAIDecodeStats?>(initialState: nil)
 
@@ -38,12 +37,14 @@ internal final class CoreAIBackend: TranscriptionBackend {
         model: CoreAIModel,
         locale: Locale = .current,
         computeUnits: CoreAIComputeUnits = .default,
-        overlapSeconds: Double = SpeechRecognitionModel.defaultOverlapSeconds
+        overlapSeconds: Double = SpeechRecognitionModel.defaultOverlapSeconds,
+        reportsPartials: Bool = false
     ) {
         self.model = model
         self.localeBox = OSAllocatedUnfairLock(initialState: locale)
         self.computeUnits = computeUnits
         self.overlapSeconds = overlapSeconds
+        self.reportsPartials = reportsPartials
     }
 
     /// Core AI wants 16 kHz mono float, same as whisper.cpp.
@@ -105,10 +106,24 @@ internal final class CoreAIBackend: TranscriptionBackend {
         // this wrong is silent.
         let language: SpeechLanguage = localeBox.withLock({ $0 }).language.languageCode
             .map { .code($0.identifier) } ?? .detect
+        let onPartial: (@Sendable (SpeechTranscriptionUpdate) -> Void)?
+        if reportsPartials {
+            onPartial = { update in
+                guard !Task.isCancelled else { return }
+                emit(CirceTranscriber.Result(
+                    range: CMTimeRange(start: .zero, end: duration),
+                    resultsFinalizationTime: .zero,
+                    text: AttributedString(update.text),
+                    partialSource: update.source == .decoder ? .decoder : .window,
+                    progress: update.progress))
+            }
+        } else {
+            onPartial = nil
+        }
         let (text, stats) = try await recognizer.transcribe(
             pcm: samples,
             overlapSeconds: overlapSeconds,
-            language: language
+            language: language, onPartial: onPartial
         )
 
         statsBox.withLock {
@@ -124,7 +139,7 @@ internal final class CoreAIBackend: TranscriptionBackend {
             range: CMTimeRange(start: .zero, end: duration),
             resultsFinalizationTime: duration,
             text: AttributedString(text.trimmingCharacters(in: .whitespacesAndNewlines)),
-            alternatives: []
+            alternatives: [], progress: 1
         ))
     }
 }

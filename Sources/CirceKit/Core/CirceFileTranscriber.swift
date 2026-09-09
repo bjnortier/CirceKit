@@ -8,7 +8,7 @@ public struct CirceTranscription: Sendable {
     /// The final results, concatenated and trimmed.
     public let text: String
 
-    /// Every result the engine produced, in emission order.
+    /// Engine results in emission order, excluding transient Core AI partial snapshots.
     public let results: [CirceTranscriber.Result]
 
     /// How much audio the file held.
@@ -97,9 +97,16 @@ public actor CirceFileTranscriber {
 
     /// Transcribes one file using the already-loaded model.
     ///
+    /// For live Core AI partials, choose `.progressiveTranscription` and provide
+    /// `onResult`. A result with `partialSource` replaces the entire displayed
+    /// transcript; it is not a delta and is not retained in the returned results.
+    /// The callback runs on the inference path, so keep it lightweight.
+    ///
     /// Safe to call repeatedly; the actor serializes runs.
-    public func transcribe(fileAt url: URL) async throws -> CirceTranscription {
-        try await transcribe(fileAt: url, locale: locale)
+    public func transcribe(
+        fileAt url: URL, onResult: (@Sendable (CirceTranscriber.Result) -> Void)? = nil
+    ) async throws -> CirceTranscription {
+        try await transcribe(fileAt: url, locale: locale, onResult: onResult)
     }
 
     /// Transcribes one file in `locale`, reusing the loaded model.
@@ -114,7 +121,9 @@ public actor CirceFileTranscriber {
     /// Deliberately loud: an engine given the wrong language does not fail, it
     /// transcribes as if the audio were in the language it was told, and scores
     /// like a broken model.
-    public func transcribe(fileAt url: URL, locale: Locale) async throws -> CirceTranscription {
+    public func transcribe(
+        fileAt url: URL, locale: Locale, onResult: (@Sendable (CirceTranscriber.Result) -> Void)? = nil
+    ) async throws -> CirceTranscription {
         try await prepare()
 
         if locale.identifier(.bcp47) != activeLocale.identifier(.bcp47) {
@@ -136,7 +145,10 @@ public actor CirceFileTranscriber {
 
         let collected = OSAllocatedUnfairLock<[CirceTranscriber.Result]>(initialState: [])
         try await engine.run(inputs: inputs) { result in
-            collected.withLock { $0.append(result) }
+            // Core AI partials replace the whole transcript. Deliver them live rather
+            // than retaining increasingly large snapshots for the lifetime of the file.
+            if result.partialSource == nil { collected.withLock { $0.append(result) } }
+            onResult?(result)
         }
 
         let results = collected.withLock { $0 }

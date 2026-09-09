@@ -116,17 +116,26 @@ public final class CirceTranscriber: CirceSpeechModule {
         public let resultsFinalizationTime: CMTime
         public let text: AttributedString
         public let alternatives: [AttributedString]
+        public enum PartialSource: Sendable { case decoder, window }
+        /// Whole-transcript replacement snapshot; nil for ordinary engine results.
+        public let partialSource: PartialSource?
+        /// Fraction of source audio decoded; nil when the backend cannot measure it.
+        public let progress: Double?
 
         public init(
             range: CMTimeRange,
             resultsFinalizationTime: CMTime,
             text: AttributedString,
-            alternatives: [AttributedString] = []
+            alternatives: [AttributedString] = [],
+            partialSource: PartialSource? = nil,
+            progress: Double? = nil
         ) {
             self.range = range
             self.resultsFinalizationTime = resultsFinalizationTime
             self.text = text
             self.alternatives = alternatives
+            self.partialSource = partialSource
+            self.progress = progress
         }
 
         public var description: String {
@@ -337,7 +346,9 @@ extension CirceTranscriber.Backend {
                 attributeOptions: attributeOptions
             )
         case .coreAI(let model):
-            CoreAIBackend(model: model, locale: locale, computeUnits: coreAIComputeUnits)
+            CoreAIBackend(
+                model: model, locale: locale, computeUnits: coreAIComputeUnits,
+                reportsPartials: reportingOptions.contains(.volatileResults))
         case .whisperCPP(let model):
             WhisperBackend(
                 model: model,
