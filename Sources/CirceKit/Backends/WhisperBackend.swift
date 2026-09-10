@@ -6,7 +6,7 @@ import os
 import whisper
 
 /// A single decoded segment as whisper.cpp reports it.
-private struct WhisperSegment {
+private struct WhisperSegment: Sendable {
     var text: String
     var start: CMTime
     var end: CMTime
@@ -14,11 +14,23 @@ private struct WhisperSegment {
 }
 
 /// One token with its timing and probability, used to build attributed runs.
-private struct WhisperTokenSpan {
+private struct WhisperTokenSpan: Sendable {
     var text: String
     var start: CMTime
     var end: CMTime
     var probability: Double
+}
+
+/// Kept alive for the entire synchronous C call. Cancellation can arrive on any thread.
+private final class WhisperCallbacks: Sendable {
+    let cancelled = OSAllocatedUnfairLock(initialState: false)
+    let tokenTimestamps: Bool
+    let emit: @Sendable (WhisperSegment) -> Void
+
+    init(tokenTimestamps: Bool, emit: @escaping @Sendable (WhisperSegment) -> Void) {
+        self.tokenTimestamps = tokenTimestamps
+        self.emit = emit
+    }
 }
 
 /// Owns a `whisper_context` and serializes access to it.
@@ -48,13 +60,13 @@ private actor WhisperContext {
         whisper_free(context)
     }
 
-    /// Runs a full decode and returns the segments, with token timings when
-    /// `tokenTimestamps` is set.
+    /// Decodes the input, delivering segments synchronously as whisper produces them.
     func transcribe(
         samples: [Float],
         language: String?,
-        tokenTimestamps: Bool
-    ) throws -> [WhisperSegment] {
+        callbacks: WhisperCallbacks
+    ) throws {
+        try Task.checkCancellation()
         var params = whisper_full_default_params(WHISPER_SAMPLING_GREEDY)
         params.print_realtime = false
         params.print_progress = false
@@ -64,39 +76,58 @@ private actor WhisperContext {
         params.no_context = true
         params.single_segment = false
         params.no_timestamps = false
-        params.token_timestamps = tokenTimestamps
+        params.token_timestamps = callbacks.tokenTimestamps
         params.n_threads = Int32(max(1, min(8, ProcessInfo.processInfo.processorCount - 2)))
+
+        let userData = Unmanaged.passUnretained(callbacks).toOpaque()
+        params.abort_callback_user_data = userData
+        params.abort_callback = { userData in
+            guard let userData else { return false }
+            return Unmanaged<WhisperCallbacks>.fromOpaque(userData)
+                .takeUnretainedValue().cancelled.withLock { $0 }
+        }
+        params.new_segment_callback_user_data = userData
+        params.new_segment_callback = { context, _, count, userData in
+            guard let context, let userData, count > 0 else { return }
+            let callbacks = Unmanaged<WhisperCallbacks>.fromOpaque(userData).takeUnretainedValue()
+            let total = whisper_full_n_segments(context)
+            for index in max(0, total - count)..<total {
+                guard !callbacks.cancelled.withLock({ $0 }) else { return }
+                callbacks.emit(WhisperContext.segment(
+                    context: context, at: index, tokenTimestamps: callbacks.tokenTimestamps))
+            }
+        }
 
         // `params.language` is a borrowed `const char *`: whisper_full must run
         // inside the withCString scope or the pointer dangles.
         let languageCode = language ?? "auto"
-        let status = languageCode.withCString { languagePointer -> Int32 in
-            params.language = languagePointer
-            return samples.withUnsafeBufferPointer { buffer in
-                whisper_full(context, params, buffer.baseAddress, Int32(buffer.count))
+        let status = withExtendedLifetime(callbacks) {
+            languageCode.withCString { languagePointer -> Int32 in
+                params.language = languagePointer
+                return samples.withUnsafeBufferPointer { buffer in
+                    whisper_full(context, params, buffer.baseAddress, Int32(buffer.count))
+                }
             }
         }
+        if callbacks.cancelled.withLock({ $0 }) { throw CancellationError() }
+        try Task.checkCancellation()
         guard status == 0 else {
             throw CirceError.invalidState("whisper_full failed with code \(status)")
         }
-
-        return (0..<whisper_full_n_segments(context)).map { index in
-            segment(at: index, tokenTimestamps: tokenTimestamps)
-        }
     }
 
-    private func segment(at index: Int32, tokenTimestamps: Bool) -> WhisperSegment {
+    private nonisolated static func segment(context: OpaquePointer, at index: Int32, tokenTimestamps: Bool) -> WhisperSegment {
         let text = whisper_full_get_segment_text(context, index).map { String(cString: $0) } ?? ""
         let segment = WhisperSegment(
             text: text,
             start: Self.time(centiseconds: whisper_full_get_segment_t0(context, index)),
             end: Self.time(centiseconds: whisper_full_get_segment_t1(context, index)),
-            tokens: tokenTimestamps ? tokens(inSegment: index) : []
+            tokens: tokenTimestamps ? tokens(context: context, inSegment: index) : []
         )
         return segment
     }
 
-    private func tokens(inSegment index: Int32) -> [WhisperTokenSpan] {
+    private nonisolated static func tokens(context: OpaquePointer, inSegment index: Int32) -> [WhisperTokenSpan] {
         let endOfText = whisper_token_eot(context)
         var spans: [WhisperTokenSpan] = []
         for tokenIndex in 0..<whisper_full_n_tokens(context, index) {
@@ -115,15 +146,14 @@ private actor WhisperContext {
     }
 
     /// whisper.cpp reports times in centiseconds.
-    private static func time(centiseconds: Int64) -> CMTime {
+    private nonisolated static func time(centiseconds: Int64) -> CMTime {
         CMTime(value: CMTimeValue(max(0, centiseconds)), timescale: 100)
     }
 }
 
 /// whisper.cpp backend.
 ///
-/// Batch: accumulates the whole input stream, decodes once, then emits one
-/// result per whisper segment. Segment and token timings are real, so
+/// Accumulates the input stream, then emits each segment as decoding produces it. Segment and token timings are real, so
 /// `.audioTimeRange` and `.transcriptionConfidence` are both supported.
 internal final class WhisperBackend: TranscriptionBackend {
     private let model: WhisperModel
@@ -191,31 +221,21 @@ internal final class WhisperBackend: TranscriptionBackend {
 
         let wantsTiming = attributeOptions.contains(.audioTimeRange)
             || attributeOptions.contains(.transcriptionConfidence)
-        let segments = try await context.transcribe(
-            samples: samples,
-            language: languageCode,
-            tokenTimestamps: wantsTiming
-        )
-
-        // Everything whisper.cpp produces is final: the whole clip was decoded in
-        // one pass. Finalization must therefore cover every segment — and it cannot
-        // simply be the audio duration, because whisper rounds segment ends to
-        // centiseconds and routinely reports a last segment ending *past* the end of
-        // the audio (10.00s for a 9.90s clip). Taking the duration there would leave
-        // `isFinal` false, and a caller filtering on it would silently drop a
-        // perfectly good transcript.
-        let finalizationTime = segments.reduce(duration) { latest, segment in
-            max(latest, max(segment.end, segment.start))
-        }
-
-        for segment in segments {
-            let range = CMTimeRange(start: segment.start, end: max(segment.end, segment.start))
+        let callbacks = WhisperCallbacks(tokenTimestamps: wantsTiming) { [self] segment in
+            let end = max(segment.end, segment.start)
             emit(CirceTranscriber.Result(
-                range: range,
-                resultsFinalizationTime: finalizationTime,
+                range: CMTimeRange(start: segment.start, end: end),
+                // Decoded segments are final, including ends rounded beyond the clip.
+                resultsFinalizationTime: max(duration, end),
                 text: attributedText(for: segment),
                 alternatives: []
             ))
+        }
+        try await withTaskCancellationHandler {
+            try await context.transcribe(
+                samples: samples, language: languageCode, callbacks: callbacks)
+        } onCancel: {
+            callbacks.cancelled.withLock { $0 = true }
         }
     }
 

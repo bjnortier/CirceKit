@@ -109,6 +109,8 @@ public actor CirceFileTranscriber {
 
     /// Transcribes one file using the already-loaded model.
     ///
+    /// whisper.cpp delivers finalized segments to `onResult` as they are decoded;
+    /// cancelling the calling task interrupts decoding and throws `CancellationError`.
     /// For live Core AI partials, choose `.progressiveTranscription` and provide
     /// `onResult`. A result with `partialSource` replaces the entire displayed
     /// transcript; it is not a delta and is not retained in the returned results.

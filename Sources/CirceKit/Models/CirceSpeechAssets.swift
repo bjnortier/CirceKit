@@ -48,9 +48,21 @@ public enum CirceSpeechAssets {
     }
 
     /// Gives back `locale`'s reservation slot.
+    ///
+    /// `AssetInventory` matches a reservation by the locale's exact identifier,
+    /// and what it holds is Apple's own equivalent of what was reserved —
+    /// `fr_CA` for a `fr-CA` request — so releasing a locale built from a BCP 47
+    /// tag silently does nothing. The current reservations are searched for the
+    /// equivalent locale and that one is released instead.
+    ///
+    /// - Returns: `false` when the locale holds no reservation.
     @discardableResult
     public static func release(locale: Locale) async -> Bool {
-        await AssetInventory.release(reservedLocale: locale)
+        let identifier = locale.identifier(.bcp47)
+        guard let reserved = await reservedLocales.first(where: { $0.identifier(.bcp47) == identifier }) else {
+            return false
+        }
+        return await AssetInventory.release(reservedLocale: reserved)
     }
 
     /// Claims a slot for `locale` unless this app already holds one.

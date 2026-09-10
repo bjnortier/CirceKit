@@ -2,6 +2,7 @@ import AVFoundation
 import CoreMedia
 import Foundation
 import Testing
+import os
 @testable import CirceKit
 
 /// End-to-end whisper.cpp runs over the bundled JFK clip.
@@ -143,6 +144,43 @@ struct WhisperBackendTests {
             }
         }
         #expect(scored > 0, "expected per-token confidences")
+    }
+
+    @Test("Live segments can cancel decoding and the loaded model remains reusable")
+    func cancelsFromLiveSegmentAndReusesModel() async throws {
+        let directory = URL.temporaryDirectory.appending(path: "circe-cancel-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appending(path: "long.wav")
+        try Self.writeClip(seconds: 65, to: url)
+        let transcriber = CirceFileTranscriber(
+            backend: .whisperCPP(TestEnv.testModel), locale: Locale(identifier: "en_US"))
+        let emitted = OSAllocatedUnfairLock<[CirceTranscriber.Result]>(initialState: [])
+        let task = Task {
+            try await transcriber.transcribe(fileAt: url) { result in
+                emitted.withLock { $0.append(result) }
+                // Cancel while inside the first C segment callback, before the
+                // remaining audio can be decoded. No sleeps or timing assumptions.
+                withUnsafeCurrentTask { $0?.cancel() }
+            }
+        }
+        do {
+            _ = try await task.value
+            Issue.record("Cancelled inference returned success")
+        } catch is CancellationError {
+            // Cancellation must not surface as a generic whisper_full failure.
+        }
+        let segments = emitted.withLock { $0 }
+        #expect(segments.count == 1)
+        #expect(segments.allSatisfy { $0.isFinal })
+        #expect(try #require(segments.first).range.end.seconds < 65)
+
+        let live = OSAllocatedUnfairLock<[String]>(initialState: [])
+        let result = try await transcriber.transcribe(fileAt: TestEnv.jfkURL) { update in
+            live.withLock { $0.append(String(update.text.characters)) }
+        }
+        #expect(TestEnv.jfkWER(result.text) < 0.2)
+        #expect(live.withLock { $0 } == result.results.map { String($0.text.characters) })
     }
 
     /// Writes a clip of `seconds` by looping the JFK sample.
