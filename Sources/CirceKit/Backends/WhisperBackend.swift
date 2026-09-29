@@ -243,7 +243,9 @@ internal final class WhisperBackend: TranscriptionBackend {
     private var languageCode: String? {
         // English-only models reject anything but "en".
         if model.isEnglishOnly { return "en" }
-        return localeBox.withLock({ $0 }).language.languageCode?.identifier
+        let code = localeBox.withLock({ $0 }).language.languageCode?.identifier
+        // BCP 47 "und" is undetermined; whisper.cpp would treat it as an unknown language.
+        return code == "und" ? nil : code
     }
 
     /// The loaded context is multilingual and takes the language per call, so a
