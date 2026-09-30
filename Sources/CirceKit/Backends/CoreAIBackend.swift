@@ -109,9 +109,9 @@ internal final class CoreAIBackend: TranscriptionBackend {
         // told us the locale, and detection costs an extra decoder step and can
         // pick wrong on short or noisy audio. Whisper exports transcribe an
         // unnamed language as if it were the one they were pinned to, so getting
-        // this wrong is silent.
-        let language: SpeechLanguage = localeBox.withLock({ $0 }).language.languageCode
-            .map { .code($0.identifier) } ?? .detect
+        // this wrong is silent. BCP 47 "und" is undetermined, so it asks for detection.
+        let code = localeBox.withLock({ $0 }).language.languageCode?.identifier
+        let language: SpeechLanguage = code.flatMap { $0 == "und" ? nil : .code($0) } ?? .detect
         let onPartial: (@Sendable (SpeechTranscriptionUpdate) -> Void)?
         if reportsPartials {
             onPartial = { update in
