@@ -2,19 +2,27 @@ import Foundation
 import Testing
 @testable import CirceKit
 
-/// Translation is one token of Whisper's decoder prefix, so only the Core AI
-/// backend can offer it. The failure mode when it is not honoured is the worst
-/// kind: a fluent, plausible transcript in the language that was spoken, which
-/// nothing in the output marks as untranslated. These tests pin the loud paths.
+/// Translation is one token of Whisper's decoder prefix, so only Whisper can
+/// offer it — Core AI exports, and multilingual non-turbo whisper.cpp models.
+/// The failure mode when it is not honoured is the worst kind: a fluent,
+/// plausible transcript in the language that was spoken, which nothing in the
+/// output marks as untranslated. These tests pin the loud paths.
 @Suite("Translation to English")
 struct TranslationTests {
     // MARK: Backend capability
 
-    @Test("Only the Core AI backend claims translation")
-    func onlyCoreAITranslates() {
+    @Test("Only Whisper backends claim translation")
+    func onlyWhisperTranslates() {
         #expect(CirceTranscriber.Backend.coreAI(.whisperLargeV3Turbo).canTranslateToEnglish)
+        #expect(CirceTranscriber.Backend.whisperCPP(.tiny).canTranslateToEnglish)
         #expect(!CirceTranscriber.Backend.apple.canTranslateToEnglish)
-        #expect(!CirceTranscriber.Backend.whisperCPP(.tinyEN).canTranslateToEnglish)
+    }
+
+    /// English-only models have no task to switch, and turbo ignores the switch.
+    @Test("whisper.cpp translates only with multilingual, non-turbo models")
+    func whisperCPPTranslationFollowsTheModel() {
+        let translating = WhisperModel.allCases.filter(\.canTranslateToEnglish)
+        #expect(Set(translating) == [.tiny, .base, .small, .medium, .largeV3])
     }
 
     @Test("Transcribing is available on every backend")
@@ -28,11 +36,12 @@ struct TranslationTests {
 
     @Test("A backend that cannot translate says so rather than transcribing")
     func rejectsUnsupportedBackends() {
-        for backend: CirceTranscriber.Backend in [.apple, .whisperCPP(.tinyEN)] {
+        for backend: CirceTranscriber.Backend in [.apple, .whisperCPP(.tinyEN), .whisperCPP(.largeV3Turbo)] {
             #expect(throws: CirceError.self) { try backend.validateTranslation(true) }
         }
         #expect(throws: Never.self) {
             try CirceTranscriber.Backend.coreAI(.whisperLargeV3Turbo).validateTranslation(true)
+            try CirceTranscriber.Backend.whisperCPP(.tiny).validateTranslation(true)
         }
     }
 

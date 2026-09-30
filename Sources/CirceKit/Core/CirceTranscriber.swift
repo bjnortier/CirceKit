@@ -155,11 +155,12 @@ public final class CirceTranscriber: CirceSpeechModule {
     public let coreAIComputeUnits: CoreAIComputeUnits
     /// Translate the audio into English instead of transcribing it as spoken.
     ///
-    /// A Core AI **Whisper** export only: the task is one token of Whisper's
-    /// decoder prefix, and Whisper's translation task has English as its only
-    /// target — ``locale`` still names the language being *spoken*. Every other
-    /// backend rejects this at ``prepare()`` rather than quietly transcribing;
-    /// see ``Backend/canTranslateToEnglish``.
+    /// Whisper only — a Core AI Whisper export, or a multilingual non-turbo
+    /// whisper.cpp model: the task is one token of Whisper's decoder prefix, and
+    /// Whisper's translation task has English as its only target — ``locale``
+    /// still names the language being *spoken*. Every other backend rejects this
+    /// at ``prepare()`` rather than quietly transcribing; see
+    /// ``Backend/canTranslateToEnglish``.
     public let translatesToEnglish: Bool
 
     private let engine: any TranscriptionBackend
@@ -346,14 +347,17 @@ extension CirceTranscriber: AnalyzerAttachable {
 extension CirceTranscriber.Backend {
     /// Whether this backend can translate its audio into English.
     ///
-    /// Core AI only, and there only for a Whisper export — the task is a token of
-    /// Whisper's decoder prefix. Parakeet has no such slot, and neither Apple's
-    /// transcriber nor this package's whisper.cpp backend exposes one. Whether a
+    /// Whisper only — the task is a token of Whisper's decoder prefix. Parakeet
+    /// has no such slot, and Apple's transcriber exposes none. For whisper.cpp it
+    /// depends on the model; see ``WhisperModel/canTranslateToEnglish``. Whether a
     /// given Core AI bundle is Whisper is not knowable until it is loaded, so that
     /// half of the check belongs to `CoreAISpeech`, which throws on the decode.
     public var canTranslateToEnglish: Bool {
-        if case .coreAI = self { return true }
-        return false
+        switch self {
+        case .coreAI: true
+        case .whisperCPP(let model): model.canTranslateToEnglish
+        case .apple: false
+        }
     }
 
     /// Throws unless `translatesToEnglish` is something this backend can honour.
@@ -366,8 +370,9 @@ extension CirceTranscriber.Backend {
         throw CirceError.invalidState(
             """
             This backend cannot translate to English — that is Whisper's \
-            `<|translate|>` decoder task, which only the Core AI backend exposes. \
-            Transcribe with this backend, or choose a Core AI Whisper export.
+            `<|translate|>` decoder task, which only a Core AI Whisper export or a \
+            multilingual, non-turbo whisper.cpp model offers. Transcribe with this \
+            backend, or choose one of those.
             """
         )
     }
@@ -401,7 +406,8 @@ extension CirceTranscriber.Backend {
             WhisperBackend(
                 model: model,
                 locale: locale,
-                attributeOptions: attributeOptions
+                attributeOptions: attributeOptions,
+                translatesToEnglish: translatesToEnglish
             )
         }
     }

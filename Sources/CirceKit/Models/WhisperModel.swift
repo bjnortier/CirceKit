@@ -50,6 +50,19 @@ public enum WhisperModel: String, Sendable, CaseIterable, Equatable, Hashable {
         }
     }
 
+    /// Whether whisper.cpp's translate task produces English with this model.
+    ///
+    /// English-only models have no task token to switch. The large-v3 turbo
+    /// models were distilled on transcription only and return the source-language
+    /// transcript unchanged when asked to translate — silently, so they are
+    /// excluded rather than trusted.
+    public var canTranslateToEnglish: Bool {
+        switch self {
+        case .tinyEN, .baseEN, .smallEN, .mediumEN, .largeV3Turbo, .largeV3TurboQ5_0: return false
+        case .tiny, .base, .small, .medium, .largeV3: return true
+        }
+    }
+
     /// Approximate download size, for progress reporting and UI.
     public var approximateBytes: Int {
         switch self {

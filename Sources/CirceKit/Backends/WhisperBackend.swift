@@ -64,6 +64,7 @@ private actor WhisperContext {
     func transcribe(
         samples: [Float],
         language: String?,
+        translatesToEnglish: Bool,
         callbacks: WhisperCallbacks
     ) throws {
         try Task.checkCancellation()
@@ -72,7 +73,7 @@ private actor WhisperContext {
         params.print_progress = false
         params.print_timestamps = false
         params.print_special = false
-        params.translate = false
+        params.translate = translatesToEnglish
         params.no_context = true
         params.single_segment = false
         params.no_timestamps = false
@@ -161,6 +162,9 @@ internal final class WhisperBackend: TranscriptionBackend {
     /// is multilingual — see ``retarget(locale:)``.
     private let localeBox: OSAllocatedUnfairLock<Locale>
     private let attributeOptions: Set<CirceTranscriber.ResultAttributeOption>
+    /// Runs whisper.cpp's translate task. Validated against the model by the
+    /// transcriber before this backend is ever run.
+    private let translatesToEnglish: Bool
     private let store: CirceModelStore
 
     /// Guarded so the log bridge is installed exactly once per process.
@@ -185,11 +189,13 @@ internal final class WhisperBackend: TranscriptionBackend {
         model: WhisperModel,
         locale: Locale,
         attributeOptions: Set<CirceTranscriber.ResultAttributeOption>,
+        translatesToEnglish: Bool = false,
         store: CirceModelStore = .shared
     ) {
         self.model = model
         self.localeBox = OSAllocatedUnfairLock(initialState: locale)
         self.attributeOptions = attributeOptions
+        self.translatesToEnglish = translatesToEnglish
         self.store = store
     }
 
@@ -233,7 +239,8 @@ internal final class WhisperBackend: TranscriptionBackend {
         }
         try await withTaskCancellationHandler {
             try await context.transcribe(
-                samples: samples, language: languageCode, callbacks: callbacks)
+                samples: samples, language: languageCode, translatesToEnglish: translatesToEnglish,
+                callbacks: callbacks)
         } onCancel: {
             callbacks.cancelled.withLock { $0 = true }
         }
