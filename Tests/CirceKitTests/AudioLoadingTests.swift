@@ -2,6 +2,7 @@ import AVFoundation
 import CoreMedia
 import Foundation
 import Testing
+
 @testable import CirceKit
 
 @Suite("Audio loading")

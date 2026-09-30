@@ -1,6 +1,7 @@
 import AVFoundation
 import Foundation
 import Testing
+
 @testable import CirceKit
 
 /// Shared fixtures and environment probes.
@@ -77,7 +78,8 @@ enum TestEnv {
 
         let results = try await collector.value
         // Only finals contribute to the transcript; volatiles are superseded.
-        let text = results
+        let text =
+            results
             .filter(\.isFinal)
             .map { String($0.text.characters) }
             .joined()

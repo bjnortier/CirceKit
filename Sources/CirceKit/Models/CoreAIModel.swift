@@ -34,7 +34,8 @@ public enum CoreAIModel: Sendable, Equatable, Hashable {
     /// The exports directory in effect, honouring the environment override.
     public static var exportsDirectory: URL {
         if let path = ProcessInfo.processInfo.environment[exportsDirectoryEnvironmentKey],
-           !path.isEmpty {
+            !path.isEmpty
+        {
             return URL(filePath: path, directoryHint: .isDirectory)
         }
         return defaultExportsDirectory
@@ -132,9 +133,10 @@ extension CoreAIModel {
     private static func assetURLs(in url: URL) -> [URL] {
         let assetExtensions: Set<String> = ["aimodel", "aimodelc"]
         if assetExtensions.contains(url.pathExtension) { return [url] }
-        let entries = (try? FileManager.default.contentsOfDirectory(
-            at: url, includingPropertiesForKeys: nil
-        )) ?? []
+        let entries =
+            (try? FileManager.default.contentsOfDirectory(
+                at: url, includingPropertiesForKeys: nil
+            )) ?? []
         return entries.filter { assetExtensions.contains($0.pathExtension) }.sorted { $0.path < $1.path }
     }
 }
@@ -172,7 +174,7 @@ extension CoreAIModel {
 
         for pair in forced where pair.count == 2 {
             guard let name = namesByID[pair[1]],
-                  name.hasPrefix("<|"), name.hasSuffix("|>")
+                name.hasPrefix("<|"), name.hasSuffix("|>")
             else { continue }
             let code = String(name.dropFirst(2).dropLast(2))
             // Language tags are 2-3 letter codes; the task and control tokens
@@ -207,7 +209,7 @@ extension CoreAIModel {
         guard let url = resolvedURL else { return [] }
         for name in ["added_tokens.json", "vocab.json"] {
             guard let data = try? Data(contentsOf: url.appending(path: name)),
-                  let table = try? JSONSerialization.jsonObject(with: data) as? [String: Int]
+                let table = try? JSONSerialization.jsonObject(with: data) as? [String: Int]
             else { continue }
             let codes = table.keys.compactMap { token -> String? in
                 guard token.hasPrefix("<|"), token.hasSuffix("|>") else { return nil }

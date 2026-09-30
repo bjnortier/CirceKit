@@ -2,6 +2,7 @@ import AVFoundation
 import CoreMedia
 import Foundation
 import Testing
+
 @testable import CirceKit
 
 /// Runs the backends over audio that is *not* already 16 kHz mono.
@@ -34,7 +35,10 @@ struct ResampledAudioTests {
         var fed = false
         var error: NSError?
         converter.convert(to: output, error: &error) { _, status in
-            if fed { status.pointee = .endOfStream; return nil }
+            if fed {
+                status.pointee = .endOfStream
+                return nil
+            }
             fed = true
             status.pointee = .haveData
             return input

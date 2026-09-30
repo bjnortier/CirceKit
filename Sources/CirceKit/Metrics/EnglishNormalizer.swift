@@ -83,11 +83,11 @@ private nonisolated func removeSymbolsAndDiacritics(_ s: String, keep: Set<Unico
         } else {
             switch scalar.properties.generalCategory {
             case .nonspacingMark:
-                break // drop
+                break  // drop
             case .spacingMark, .enclosingMark,
-                 .mathSymbol, .currencySymbol, .modifierSymbol, .otherSymbol,
-                 .connectorPunctuation, .dashPunctuation, .openPunctuation,
-                 .closePunctuation, .initialPunctuation, .finalPunctuation, .otherPunctuation:
+                .mathSymbol, .currencySymbol, .modifierSymbol, .otherSymbol,
+                .connectorPunctuation, .dashPunctuation, .openPunctuation,
+                .closePunctuation, .initialPunctuation, .finalPunctuation, .otherPunctuation:
                 result += " "
             default:
                 result.unicodeScalars.append(scalar)
@@ -121,12 +121,17 @@ private nonisolated final class EnglishNumberNormalizer: Sendable {
     private let specials: Set<String> = ["and", "double", "triple", "point"]
     private let words: Set<String>
 
-    private enum SuffixValue { case string(String); case map([String: String]) }
+    private enum SuffixValue {
+        case string(String)
+        case map([String: String])
+    }
 
     init() {
-        let onesNames = ["one", "two", "three", "four", "five", "six", "seven", "eight", "nine",
-                         "ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen",
-                         "seventeen", "eighteen", "nineteen"]
+        let onesNames = [
+            "one", "two", "three", "four", "five", "six", "seven", "eight", "nine",
+            "ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen",
+            "seventeen", "eighteen", "nineteen",
+        ]
         var onesDict: [String: Int] = [:]
         for (i, name) in onesNames.enumerated() { onesDict[name] = i + 1 }
         ones = onesDict
@@ -209,8 +214,14 @@ private nonisolated final class EnglishNumberNormalizer: Sendable {
     // MARK: Value helpers
 
     private func isNone(_ v: Val) -> Bool { v == .none }
-    private func isStr(_ v: Val) -> Bool { if case .str = v { return true }; return false }
-    private func intVal(_ v: Val) -> Int { if case .int(let n) = v { return n }; return 0 }
+    private func isStr(_ v: Val) -> Bool {
+        if case .str = v { return true }
+        return false
+    }
+    private func intVal(_ v: Val) -> Int {
+        if case .int(let n) = v { return n }
+        return 0
+    }
     private func valStr(_ v: Val) -> String {
         switch v {
         case .none: return ""
@@ -256,7 +267,10 @@ private nonisolated final class EnglishNumberNormalizer: Sendable {
         var i = 0
         while i < words.count {
             defer { i += 1 }
-            if skip { skip = false; continue }
+            if skip {
+                skip = false
+                continue
+            }
 
             let prev: String? = i > 0 ? words[i - 1] : nil
             let current = words[i]
@@ -292,11 +306,17 @@ private nonisolated final class EnglishNumberNormalizer: Sendable {
                         value = .str(valStr(value) + String(onesVal))
                     }
                 } else if onesVal < 10 {
-                    if intVal(value) % 10 == 0 { value = .int(intVal(value) + onesVal) }
-                    else { value = .str(String(intVal(value)) + String(onesVal)) }
+                    if intVal(value) % 10 == 0 {
+                        value = .int(intVal(value) + onesVal)
+                    } else {
+                        value = .str(String(intVal(value)) + String(onesVal))
+                    }
                 } else {
-                    if intVal(value) % 100 == 0 { value = .int(intVal(value) + onesVal) }
-                    else { value = .str(String(intVal(value)) + String(onesVal)) }
+                    if intVal(value) % 100 == 0 {
+                        value = .int(intVal(value) + onesVal)
+                    } else {
+                        value = .str(String(intVal(value)) + String(onesVal))
+                    }
                 }
             } else if let (onesVal, suffix) = onesSuffixed[current] {
                 if isNone(value) {
@@ -308,11 +328,17 @@ private nonisolated final class EnglishNumberNormalizer: Sendable {
                         output(valStr(value) + String(onesVal) + suffix)
                     }
                 } else if onesVal < 10 {
-                    if intVal(value) % 10 == 0 { output(String(intVal(value) + onesVal) + suffix) }
-                    else { output(String(intVal(value)) + String(onesVal) + suffix) }
+                    if intVal(value) % 10 == 0 {
+                        output(String(intVal(value) + onesVal) + suffix)
+                    } else {
+                        output(String(intVal(value)) + String(onesVal) + suffix)
+                    }
                 } else {
-                    if intVal(value) % 100 == 0 { output(String(intVal(value) + onesVal) + suffix) }
-                    else { output(String(intVal(value)) + String(onesVal) + suffix) }
+                    if intVal(value) % 100 == 0 {
+                        output(String(intVal(value) + onesVal) + suffix)
+                    } else {
+                        output(String(intVal(value)) + String(onesVal) + suffix)
+                    }
                 }
                 value = .none
             } else if let tensVal = tens[current] {
@@ -321,8 +347,11 @@ private nonisolated final class EnglishNumberNormalizer: Sendable {
                 } else if isStr(value) {
                     value = .str(valStr(value) + String(tensVal))
                 } else {
-                    if intVal(value) % 100 == 0 { value = .int(intVal(value) + tensVal) }
-                    else { value = .str(String(intVal(value)) + String(tensVal)) }
+                    if intVal(value) % 100 == 0 {
+                        value = .int(intVal(value) + tensVal)
+                    } else {
+                        value = .str(String(intVal(value)) + String(tensVal))
+                    }
                 }
             } else if let (tensVal, suffix) = tensSuffixed[current] {
                 if isNone(value) {
@@ -330,8 +359,11 @@ private nonisolated final class EnglishNumberNormalizer: Sendable {
                 } else if isStr(value) {
                     output(valStr(value) + String(tensVal) + suffix)
                 } else {
-                    if intVal(value) % 100 == 0 { output(String(intVal(value) + tensVal) + suffix) }
-                    else { output(String(intVal(value)) + String(tensVal) + suffix) }
+                    if intVal(value) % 100 == 0 {
+                        output(String(intVal(value) + tensVal) + suffix)
+                    } else {
+                        output(String(intVal(value)) + String(tensVal) + suffix)
+                    }
                 }
             } else if let multiplier = multipliers[current] {
                 if isNone(value) {
@@ -587,8 +619,9 @@ public nonisolated struct EnglishTextNormalizer: Sendable {
     public static func bundled() -> EnglishTextNormalizer {
         var mapping: [String: String] = [:]
         if let url = Bundle.module.url(forResource: "english", withExtension: "json"),
-           let data = try? Data(contentsOf: url),
-           let decoded = try? JSONDecoder().decode([String: String].self, from: data) {
+            let data = try? Data(contentsOf: url),
+            let decoded = try? JSONDecoder().decode([String: String].self, from: data)
+        {
             mapping = decoded
         }
         return EnglishTextNormalizer(spellingMapping: mapping)
@@ -604,7 +637,7 @@ public nonisolated struct EnglishTextNormalizer: Sendable {
         var s = input.lowercased()
 
         s = regexReplace(s, "[<\\[][^>\\]]*[>\\]]", "")  // remove between brackets
-        s = regexReplace(s, "\\(([^)]+?)\\)", "")        // remove between parentheses
+        s = regexReplace(s, "\\(([^)]+?)\\)", "")  // remove between parentheses
         s = regexReplace(s, Self.ignorePattern, "")
         s = regexReplace(s, "\\s+'", "'")
 
@@ -612,8 +645,8 @@ public nonisolated struct EnglishTextNormalizer: Sendable {
             s = regexReplace(s, pattern, replacement)
         }
 
-        s = regexReplace(s, "(\\d),(\\d)", "$1$2")       // remove commas between digits
-        s = regexReplace(s, "\\.([^0-9]|$)", " $1")      // periods not followed by numbers
+        s = regexReplace(s, "(\\d),(\\d)", "$1$2")  // remove commas between digits
+        s = regexReplace(s, "\\.([^0-9]|$)", " $1")  // periods not followed by numbers
         s = removeSymbolsAndDiacritics(s, keep: Self.keep)
 
         s = numbers(s)

@@ -167,7 +167,8 @@ public actor CirceFileTranscriber {
 
         let results = collected.withLock { $0 }
         // Volatile results are superseded by the finals that follow them.
-        let text = results
+        let text =
+            results
             .filter(\.isFinal)
             .map { String($0.text.characters) }
             .joined()

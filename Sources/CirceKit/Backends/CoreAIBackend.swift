@@ -116,12 +116,13 @@ internal final class CoreAIBackend: TranscriptionBackend {
         if reportsPartials {
             onPartial = { update in
                 guard !Task.isCancelled else { return }
-                emit(CirceTranscriber.Result(
-                    range: CMTimeRange(start: .zero, end: duration),
-                    resultsFinalizationTime: .zero,
-                    text: AttributedString(update.text),
-                    partialSource: update.source == .decoder ? .decoder : .window,
-                    progress: update.progress))
+                emit(
+                    CirceTranscriber.Result(
+                        range: CMTimeRange(start: .zero, end: duration),
+                        resultsFinalizationTime: .zero,
+                        text: AttributedString(update.text),
+                        partialSource: update.source == .decoder ? .decoder : .window,
+                        progress: update.progress))
             }
         } else {
             onPartial = nil
@@ -147,11 +148,12 @@ internal final class CoreAIBackend: TranscriptionBackend {
             )
         }
 
-        emit(CirceTranscriber.Result(
-            range: CMTimeRange(start: .zero, end: duration),
-            resultsFinalizationTime: duration,
-            text: AttributedString(text.trimmingCharacters(in: .whitespacesAndNewlines)),
-            alternatives: [], progress: 1
-        ))
+        emit(
+            CirceTranscriber.Result(
+                range: CMTimeRange(start: .zero, end: duration),
+                resultsFinalizationTime: duration,
+                text: AttributedString(text.trimmingCharacters(in: .whitespacesAndNewlines)),
+                alternatives: [], progress: 1
+            ))
     }
 }

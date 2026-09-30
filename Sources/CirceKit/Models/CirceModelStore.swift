@@ -22,7 +22,8 @@ public actor CirceModelStore {
         if let directory {
             self.directory = directory
         } else {
-            let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
+            let caches =
+                FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
                 ?? URL.temporaryDirectory
             self.directory = caches.appending(path: "CirceKit/Models", directoryHint: .isDirectory)
         }
@@ -31,7 +32,7 @@ public actor CirceModelStore {
     /// The externally-provided model directory, if `CIRCEKIT_MODEL_DIR` names one.
     private nonisolated var overrideDirectory: URL? {
         guard let path = ProcessInfo.processInfo.environment[Self.modelDirectoryEnvironmentKey],
-              !path.isEmpty
+            !path.isEmpty
         else { return nil }
         return URL(filePath: path, directoryHint: .isDirectory)
     }
@@ -187,9 +188,9 @@ private final class ProgressReportingDownload: NSObject, URLSessionDownloadDeleg
     }
 }
 
-private extension Sequence {
+extension Sequence {
     /// `compactMap { $0 }` for a sequence of optionals, without the closure.
-    func compacted<Wrapped>() -> [Wrapped] where Element == Wrapped? {
+    fileprivate func compacted<Wrapped>() -> [Wrapped] where Element == Wrapped? {
         compactMap { $0 }
     }
 }

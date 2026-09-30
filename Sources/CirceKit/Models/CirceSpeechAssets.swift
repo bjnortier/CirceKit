@@ -137,9 +137,11 @@ public enum CirceSpeechAssets {
                 attributeOptions: []
             )
             // A nil request means the assets arrived between the check and here.
-            guard let request = try await AssetInventory.assetInstallationRequest(
-                supporting: [transcriber]
-            ) else {
+            guard
+                let request = try await AssetInventory.assetInstallationRequest(
+                    supporting: [transcriber]
+                )
+            else {
                 progressHandler?(1.0)
                 return
             }

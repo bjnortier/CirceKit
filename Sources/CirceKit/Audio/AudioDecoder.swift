@@ -32,18 +32,21 @@ public nonisolated enum AudioDecoder {
     public static func decodePCM16kMono(url: URL) throws -> [Float] {
         let file = try AVAudioFile(forReading: url)
         let sourceFormat = file.processingFormat
-        guard let sourceBuffer = AVAudioPCMBuffer(
-            pcmFormat: sourceFormat,
-            frameCapacity: AVAudioFrameCount(file.length)
-        ) else {
+        guard
+            let sourceBuffer = AVAudioPCMBuffer(
+                pcmFormat: sourceFormat,
+                frameCapacity: AVAudioFrameCount(file.length)
+            )
+        else {
             throw DecodeError.bufferAllocationFailed
         }
         try file.read(into: sourceBuffer)
 
         // Fast path: the file is already 16 kHz mono float.
         if sourceFormat.commonFormat == .pcmFormatFloat32,
-           sourceFormat.sampleRate == targetSampleRate,
-           sourceFormat.channelCount == 1 {
+            sourceFormat.sampleRate == targetSampleRate,
+            sourceFormat.channelCount == 1
+        {
             return floats(from: sourceBuffer)
         }
 
@@ -54,8 +57,9 @@ public nonisolated enum AudioDecoder {
     public static func pcm16kMono(from buffer: AVAudioPCMBuffer) throws -> [Float] {
         let format = buffer.format
         if format.commonFormat == .pcmFormatFloat32,
-           format.sampleRate == targetSampleRate,
-           format.channelCount == 1 {
+            format.sampleRate == targetSampleRate,
+            format.channelCount == 1
+        {
             return floats(from: buffer)
         }
         return try resample(buffer, from: format, to: canonicalFormat)

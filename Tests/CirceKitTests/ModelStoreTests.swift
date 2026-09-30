@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+
 @testable import CirceKit
 
 @Suite("Model store", .serialized)
@@ -51,7 +52,8 @@ struct ModelStoreTests {
         let url = try await store.url(for: .tinyEN)
 
         #expect(FileManager.default.fileExists(atPath: url.path(percentEncoded: false)))
-        let size = try FileManager.default
+        let size =
+            try FileManager.default
             .attributesOfItem(atPath: url.path(percentEncoded: false))[.size] as? Int ?? 0
         // The real tiny.en model is ~75 MB; anything much smaller is a truncated fetch.
         #expect(size > 50_000_000)

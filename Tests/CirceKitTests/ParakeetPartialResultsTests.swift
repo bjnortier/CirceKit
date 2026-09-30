@@ -2,6 +2,7 @@ import AVFoundation
 import Foundation
 import Testing
 import os
+
 @testable import CirceKit
 
 @Suite struct ParakeetPartialResultsTests {
@@ -11,8 +12,9 @@ import os
         defer { try? FileManager.default.removeItem(at: temporary) }
         do {
             let input = try AVAudioFile(forReading: TestEnv.jfkURL)
-            let buffer = try #require(AVAudioPCMBuffer(
-                pcmFormat: input.processingFormat, frameCapacity: AVAudioFrameCount(input.length)))
+            let buffer = try #require(
+                AVAudioPCMBuffer(
+                    pcmFormat: input.processingFormat, frameCapacity: AVAudioFrameCount(input.length)))
             try input.read(into: buffer)
             let output = try AVAudioFile(forWriting: temporary, settings: input.processingFormat.settings)
             for _ in 0..<6 { try output.write(from: buffer) }

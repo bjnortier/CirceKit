@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+
 @testable import CirceKit
 
 /// Translation is one token of Whisper's decoder prefix, so only Whisper can

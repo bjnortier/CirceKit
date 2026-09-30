@@ -85,12 +85,13 @@ internal final class AppleBackend: TranscriptionBackend {
         // would deadlock.
         let collector = Task {
             for try await result in transcriber.results {
-                emit(CirceTranscriber.Result(
-                    range: result.range,
-                    resultsFinalizationTime: result.resultsFinalizationTime,
-                    text: result.text,
-                    alternatives: result.alternatives
-                ))
+                emit(
+                    CirceTranscriber.Result(
+                        range: result.range,
+                        resultsFinalizationTime: result.resultsFinalizationTime,
+                        text: result.text,
+                        alternatives: result.alternatives
+                    ))
             }
         }
 

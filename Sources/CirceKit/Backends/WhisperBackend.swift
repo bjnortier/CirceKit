@@ -45,10 +45,12 @@ private actor WhisperContext {
     init(modelPath: URL) throws {
         var contextParams = whisper_context_default_params()
         contextParams.use_gpu = true
-        guard let context = whisper_init_from_file_with_params(
-            modelPath.path(percentEncoded: false),
-            contextParams
-        ) else {
+        guard
+            let context = whisper_init_from_file_with_params(
+                modelPath.path(percentEncoded: false),
+                contextParams
+            )
+        else {
             throw CirceError.modelUnavailable(
                 "whisper.cpp could not load the model at \(modelPath.lastPathComponent)"
             )
@@ -94,8 +96,9 @@ private actor WhisperContext {
             let total = whisper_full_n_segments(context)
             for index in max(0, total - count)..<total {
                 guard !callbacks.cancelled.withLock({ $0 }) else { return }
-                callbacks.emit(WhisperContext.segment(
-                    context: context, at: index, tokenTimestamps: callbacks.tokenTimestamps))
+                callbacks.emit(
+                    WhisperContext.segment(
+                        context: context, at: index, tokenTimestamps: callbacks.tokenTimestamps))
             }
         }
 
@@ -117,7 +120,9 @@ private actor WhisperContext {
         }
     }
 
-    private nonisolated static func segment(context: OpaquePointer, at index: Int32, tokenTimestamps: Bool) -> WhisperSegment {
+    private nonisolated static func segment(
+        context: OpaquePointer, at index: Int32, tokenTimestamps: Bool
+    ) -> WhisperSegment {
         let text = whisper_full_get_segment_text(context, index).map { String(cString: $0) } ?? ""
         let segment = WhisperSegment(
             text: text,
@@ -136,12 +141,13 @@ private actor WhisperContext {
             guard whisper_full_get_token_id(context, index, tokenIndex) < endOfText else { continue }
             guard let cString = whisper_full_get_token_text(context, index, tokenIndex) else { continue }
             let data = whisper_full_get_token_data(context, index, tokenIndex)
-            spans.append(WhisperTokenSpan(
-                text: String(cString: cString),
-                start: Self.time(centiseconds: data.t0),
-                end: Self.time(centiseconds: data.t1),
-                probability: Double(data.p)
-            ))
+            spans.append(
+                WhisperTokenSpan(
+                    text: String(cString: cString),
+                    start: Self.time(centiseconds: data.t0),
+                    end: Self.time(centiseconds: data.t1),
+                    probability: Double(data.p)
+                ))
         }
         return spans
     }
@@ -169,18 +175,19 @@ internal final class WhisperBackend: TranscriptionBackend {
 
     /// Guarded so the log bridge is installed exactly once per process.
     private static let installLogBridge: Void = {
-        whisper_log_set({ level, text, _ in
-            guard let text else { return }
-            let message = String(cString: text).trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !message.isEmpty else { return }
-            let logger = Logger(subsystem: "CirceKit", category: "whisper.cpp")
-            // ggml is chatty at info level; only surface genuine problems.
-            if level.rawValue >= GGML_LOG_LEVEL_WARN.rawValue {
-                logger.warning("\(message, privacy: .public)")
-            } else {
-                logger.debug("\(message, privacy: .public)")
-            }
-        }, nil)
+        whisper_log_set(
+            { level, text, _ in
+                guard let text else { return }
+                let message = String(cString: text).trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !message.isEmpty else { return }
+                let logger = Logger(subsystem: "CirceKit", category: "whisper.cpp")
+                // ggml is chatty at info level; only surface genuine problems.
+                if level.rawValue >= GGML_LOG_LEVEL_WARN.rawValue {
+                    logger.warning("\(message, privacy: .public)")
+                } else {
+                    logger.debug("\(message, privacy: .public)")
+                }
+            }, nil)
     }()
 
     private let state = OSAllocatedUnfairLock<WhisperContext?>(initialState: nil)
@@ -225,17 +232,19 @@ internal final class WhisperBackend: TranscriptionBackend {
         let (samples, duration) = try await AudioLoader.collectPCM16kMono(from: inputs)
         guard !samples.isEmpty else { return }
 
-        let wantsTiming = attributeOptions.contains(.audioTimeRange)
+        let wantsTiming =
+            attributeOptions.contains(.audioTimeRange)
             || attributeOptions.contains(.transcriptionConfidence)
         let callbacks = WhisperCallbacks(tokenTimestamps: wantsTiming) { [self] segment in
             let end = max(segment.end, segment.start)
-            emit(CirceTranscriber.Result(
-                range: CMTimeRange(start: segment.start, end: end),
-                // Decoded segments are final, including ends rounded beyond the clip.
-                resultsFinalizationTime: max(duration, end),
-                text: attributedText(for: segment),
-                alternatives: []
-            ))
+            emit(
+                CirceTranscriber.Result(
+                    range: CMTimeRange(start: segment.start, end: end),
+                    // Decoded segments are final, including ends rounded beyond the clip.
+                    resultsFinalizationTime: max(duration, end),
+                    text: attributedText(for: segment),
+                    alternatives: []
+                ))
         }
         try await withTaskCancellationHandler {
             try await context.transcribe(
@@ -271,7 +280,7 @@ internal final class WhisperBackend: TranscriptionBackend {
     private func attributedText(for segment: WhisperSegment) -> AttributedString {
         let wantsRange = attributeOptions.contains(.audioTimeRange)
         let wantsConfidence = attributeOptions.contains(.transcriptionConfidence)
-        guard (wantsRange || wantsConfidence), !segment.tokens.isEmpty else {
+        guard wantsRange || wantsConfidence, !segment.tokens.isEmpty else {
             return AttributedString(segment.text)
         }
 

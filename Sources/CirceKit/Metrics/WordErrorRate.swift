@@ -84,7 +84,8 @@ public nonisolated enum WordErrorRate {
 
     /// Levenshtein distance over word arrays (substitution/insertion/deletion).
     public static func editDistance(_ a: [String], _ b: [String]) -> Int {
-        let n = a.count, m = b.count
+        let n = a.count
+        let m = b.count
         if n == 0 { return m }
         if m == 0 { return n }
 

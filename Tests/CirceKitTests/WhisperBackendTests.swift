@@ -3,6 +3,7 @@ import CoreMedia
 import Foundation
 import Testing
 import os
+
 @testable import CirceKit
 
 /// End-to-end whisper.cpp runs over the bundled JFK clip.
@@ -195,9 +196,11 @@ struct WhisperBackendTests {
         while pcm.count < wanted { pcm.append(contentsOf: base.prefix(wanted - pcm.count)) }
 
         let format = AudioDecoder.canonicalFormat
-        guard let buffer = AVAudioPCMBuffer(
-            pcmFormat: format, frameCapacity: AVAudioFrameCount(pcm.count)
-        ) else {
+        guard
+            let buffer = AVAudioPCMBuffer(
+                pcmFormat: format, frameCapacity: AVAudioFrameCount(pcm.count)
+            )
+        else {
             throw AudioDecoder.DecodeError.bufferAllocationFailed
         }
         buffer.frameLength = AVAudioFrameCount(pcm.count)

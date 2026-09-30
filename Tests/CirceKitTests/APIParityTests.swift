@@ -2,6 +2,7 @@ import AVFoundation
 import CoreMedia
 import Foundation
 import Testing
+
 @testable import CirceKit
 
 /// Pure-semantics tests: no models, no audio decoding, no network.

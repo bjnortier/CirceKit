@@ -85,8 +85,8 @@ extension CoreAIComputeUnits {
     public init?(rawValue: String) {
         let parts = rawValue.split(separator: "/", maxSplits: 1)
         guard parts.count == 2,
-              let encoder = CoreAIComputeUnit(rawValue: String(parts[0])),
-              let decoder = CoreAIComputeUnit(rawValue: String(parts[1]))
+            let encoder = CoreAIComputeUnit(rawValue: String(parts[0])),
+            let decoder = CoreAIComputeUnit(rawValue: String(parts[1]))
         else { return nil }
         self.init(encoder: encoder, decoder: decoder)
     }
