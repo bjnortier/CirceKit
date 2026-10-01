@@ -255,13 +255,30 @@ internal final class WhisperBackend: TranscriptionBackend {
         }
     }
 
-    /// The ISO 639-1 code whisper.cpp expects, or `nil` to auto-detect.
+    /// The language code whisper.cpp expects, or `nil` to auto-detect.
     private var languageCode: String? {
+        Self.whisperLanguageCode(for: localeBox.withLock({ $0 }), englishOnly: model.isEnglishOnly)
+    }
+
+    /// The code whisper.cpp knows for `locale`, or `nil` to auto-detect.
+    ///
+    /// `Locale` canonicalizes three of whisper.cpp's codes — "no", "tl" and "jw"
+    /// become "nb", "fil" and "jv" — so without mapping them back, a locale taken
+    /// from ``CirceTranscriber/supportedLocales(for:)`` would reach whisper.cpp as
+    /// a language it does not know.
+    static func whisperLanguageCode(for locale: Locale, englishOnly: Bool) -> String? {
         // English-only models reject anything but "en".
-        if model.isEnglishOnly { return "en" }
-        let code = localeBox.withLock({ $0 }).language.languageCode?.identifier
+        if englishOnly { return "en" }
         // BCP 47 "und" is undetermined; whisper.cpp would treat it as an unknown language.
-        return code == "und" ? nil : code
+        guard let code = locale.language.languageCode?.identifier, code != "und" else { return nil }
+        return whisperCodes[code] ?? code
+    }
+
+    private static let whisperCodes = ["nb": "no", "fil": "tl", "jv": "jw"]
+
+    /// Whether whisper.cpp has `code` among its languages.
+    static func knowsLanguage(_ code: String) -> Bool {
+        whisper_lang_id(code) >= 0
     }
 
     /// The loaded context is multilingual and takes the language per call, so a
