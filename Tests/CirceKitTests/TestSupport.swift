@@ -97,4 +97,31 @@ enum TestEnv {
             tokenizer: normalizer.tokenize
         )
     }
+
+    /// Writes a clip of `seconds` by looping the JFK sample.
+    ///
+    /// The `AVAudioFile` must go out of scope before the file is read: it
+    /// finalizes its header on deallocation, and a still-open writer leaves a
+    /// zero-length file behind.
+    static func writeClip(seconds: Double, to url: URL) throws {
+        let base = try AudioDecoder.decodePCM16kMono(url: TestEnv.jfkURL)
+        var pcm: [Float] = []
+        let wanted = Int(seconds * AudioDecoder.targetSampleRate)
+        while pcm.count < wanted { pcm.append(contentsOf: base.prefix(wanted - pcm.count)) }
+
+        let format = AudioDecoder.canonicalFormat
+        guard
+            let buffer = AVAudioPCMBuffer(
+                pcmFormat: format, frameCapacity: AVAudioFrameCount(pcm.count)
+            )
+        else {
+            throw AudioDecoder.DecodeError.bufferAllocationFailed
+        }
+        buffer.frameLength = AVAudioFrameCount(pcm.count)
+        pcm.withUnsafeBufferPointer {
+            buffer.floatChannelData![0].update(from: $0.baseAddress!, count: pcm.count)
+        }
+        let file = try AVAudioFile(forWriting: url, settings: format.settings)
+        try file.write(from: buffer)
+    }
 }

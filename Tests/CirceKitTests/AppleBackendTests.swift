@@ -1,6 +1,7 @@
 import CoreMedia
 import Foundation
 import Testing
+import os
 
 @testable import CirceKit
 
@@ -45,6 +46,50 @@ struct AppleBackendTests {
             total + result.text.runs.count { $0.audioTimeRange != nil }
         }
         #expect(timedRuns > 0)
+    }
+
+    @Test("Cancelling stops the analyzer instead of waiting out the file")
+    func cancelsPromptly() async throws {
+        guard await TestEnv.appleEnglishInstalled() else { return }
+
+        let directory = URL.temporaryDirectory.appending(path: "circe-apple-cancel-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appending(path: "long.wav")
+        let seconds = 600.0
+        try TestEnv.writeClip(seconds: seconds, to: url)
+
+        let transcriber = CirceFileTranscriber(backend: .apple, locale: Locale(identifier: "en_US"))
+        try await transcriber.prepare()
+        let emitted = OSAllocatedUnfairLock<[CirceTranscriber.Result]>(initialState: [])
+        let cancelledAt = OSAllocatedUnfairLock<ContinuousClock.Instant?>(initialState: nil)
+        let handle = OSAllocatedUnfairLock<Task<CirceTranscription, Error>?>(initialState: nil)
+        let task = Task {
+            try await transcriber.transcribe(fileAt: url) { result in
+                emitted.withLock { $0.append(result) }
+                // Results arrive on the backend's collector, not the calling task,
+                // so cancel the caller through its handle on the first one.
+                cancelledAt.withLock { $0 = $0 ?? .now }
+                handle.withLock { $0 }?.cancel()
+            }
+        }
+        handle.withLock { $0 = task }
+        do {
+            _ = try await task.value
+            Issue.record("Cancelled analysis returned success")
+        } catch is CancellationError {
+            // Cancellation must not surface as an analyzer failure.
+        }
+
+        let elapsed = try #require(cancelledAt.withLock { $0 }).duration(to: .now)
+        // The whole clip takes far longer than this; a cancel that waited it out would not.
+        #expect(elapsed < .seconds(5), "cancel took \(elapsed)")
+        let latest = emitted.withLock { $0 }.map(\.range.end.seconds).max() ?? 0
+        #expect(latest < seconds / 2)
+
+        // The next file runs on a fresh analyzer and is unaffected.
+        let result = try await transcriber.transcribe(fileAt: TestEnv.jfkURL)
+        #expect(TestEnv.jfkWER(result.text) < 0.2)
     }
 
     @Test("Reports supported locales")

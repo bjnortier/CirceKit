@@ -85,6 +85,7 @@ internal final class AppleBackend: TranscriptionBackend {
         // would deadlock.
         let collector = Task {
             for try await result in transcriber.results {
+                guard !Task.isCancelled else { break }
                 emit(
                     CirceTranscriber.Result(
                         range: result.range,
@@ -95,47 +96,67 @@ internal final class AppleBackend: TranscriptionBackend {
             }
         }
 
-        do {
-            let converter = format.map { BufferConverter(targetFormat: $0) }
-            let appleInputs = AsyncStream<AnalyzerInput> { continuation in
-                Task {
-                    for await input in inputs {
-                        do {
-                            let buffer = try converter?.convert(input.buffer) ?? input.buffer
-                            // A converted buffer's frame count no longer matches the
-                            // source timeline: resampling 44.1 kHz to the analyzer's
-                            // rate rounds per chunk, and the accumulated drift makes
-                            // the declared start times overlap, which the analyzer
-                            // rejects as disordered audio. Hand converted buffers over
-                            // without a timestamp and let the analyzer sequence them
-                            // contiguously, which is what Apple's own sample does.
-                            let startTime = converter == nil ? input.bufferStartTime : nil
-                            continuation.yield(
-                                AnalyzerInput(buffer: buffer, bufferStartTime: startTime)
-                            )
-                        } catch {
-                            // A buffer that will not convert is dropped rather than
-                            // failing the whole run; the analyzer sees a gap.
-                            continue
-                        }
-                    }
-                    // Drain the resampler's tail before ending the stream.
-                    if let tail = try? converter?.flush() ?? nil {
-                        continuation.yield(AnalyzerInput(buffer: tail, bufferStartTime: nil))
-                    }
-                    continuation.finish()
+        // The feeder is unstructured, so cancelling the caller does not reach it:
+        // it is stopped through the stream's termination instead, or it would go
+        // on resampling the rest of the file after the analyzer has stopped.
+        let converter = format.map { BufferConverter(targetFormat: $0) }
+        let (appleInputs, continuation) = AsyncStream<AnalyzerInput>.makeStream()
+        let feeder = Task {
+            for await input in inputs {
+                guard !Task.isCancelled else { break }
+                do {
+                    let buffer = try converter?.convert(input.buffer) ?? input.buffer
+                    // A converted buffer's frame count no longer matches the
+                    // source timeline: resampling 44.1 kHz to the analyzer's
+                    // rate rounds per chunk, and the accumulated drift makes
+                    // the declared start times overlap, which the analyzer
+                    // rejects as disordered audio. Hand converted buffers over
+                    // without a timestamp and let the analyzer sequence them
+                    // contiguously, which is what Apple's own sample does.
+                    let startTime = converter == nil ? input.bufferStartTime : nil
+                    continuation.yield(AnalyzerInput(buffer: buffer, bufferStartTime: startTime))
+                } catch {
+                    // A buffer that will not convert is dropped rather than
+                    // failing the whole run; the analyzer sees a gap.
+                    continue
                 }
             }
-
-            // analyzeSequence drives the input to completion; start() would return
-            // immediately and finalize before the audio had been consumed.
-            if let lastTime = try await analyzer.analyzeSequence(appleInputs) {
-                try await analyzer.finalizeAndFinish(through: lastTime)
-            } else {
-                try await analyzer.finalizeAndFinishThroughEndOfInput()
+            // Drain the resampler's tail before ending the stream.
+            if !Task.isCancelled, let tail = try? converter?.flush() ?? nil {
+                continuation.yield(AnalyzerInput(buffer: tail, bufferStartTime: nil))
             }
+            continuation.finish()
+        }
+        continuation.onTermination = { _ in feeder.cancel() }
+
+        do {
+            // The analyzer works in its own context and keeps going after its caller
+            // is cancelled: a whole file is queued faster than real time, so
+            // finalizing would otherwise wait out the rest of it. Only
+            // cancelAndFinishNow() stops it.
+            try await withTaskCancellationHandler {
+                // analyzeSequence drives the input to completion; start() would return
+                // immediately and finalize before the audio had been consumed.
+                let lastTime = try await analyzer.analyzeSequence(appleInputs)
+                try Task.checkCancellation()
+                if let lastTime {
+                    try await analyzer.finalizeAndFinish(through: lastTime)
+                } else {
+                    try await analyzer.finalizeAndFinishThroughEndOfInput()
+                }
+            } onCancel: {
+                Task { await analyzer.cancelAndFinishNow() }
+            }
+            try Task.checkCancellation()
         } catch {
+            feeder.cancel()
             collector.cancel()
+            // A cancelled analyzer may report it as its own error; callers expect
+            // cancellation to read as cancellation.
+            if Task.isCancelled {
+                await analyzer.cancelAndFinishNow()
+                throw CancellationError()
+            }
             throw error
         }
 
